@@ -91,6 +91,11 @@ timeout 30 python3 "$SCRIPT_DIR/render_map.py" \
     "$LOG_DIR/octomap_map_citypark_loop.png"
 timeout 15 python3 "$SCRIPT_DIR/capture_depth_topic.py" \
     "$LOG_DIR/depth_rviz_citypark.png"
+MAP_BT="$LOG_DIR/octomap_citypark_loop.bt"
+if ! timeout 30 ros2 run octomap_server octomap_saver_node --ros-args \
+    -p octomap_path:="$MAP_BT" -p full:=false; then
+    echo "warning: OctoMap BT export failed"
+fi
 stop_map_bridge
 
 echo "== 拷回 Windows 交付目录 =="
@@ -101,5 +106,8 @@ cp "$LOG_DIR/octomap_map_citypark_loop.png" "$WIN_DEST/"
 cp "$LOG_DIR/depth_rviz_citypark.png" "$WIN_DEST/"
 cp "$MISSION_CONSOLE_LOG" "$WIN_DEST/mission_console.log"
 cp "$MAP_BRIDGE_LOG" "$WIN_DEST/map_bridge.log" 2>/dev/null || true
+if [ -f "$MAP_BT" ]; then
+    cp "$MAP_BT" "$WIN_DEST/octomap_citypark_loop.bt"
+fi
 
 echo "== 完成：$WIN_DEST =="

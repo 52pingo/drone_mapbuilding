@@ -50,12 +50,14 @@ def test_export_map_writes_portable_scene(tmp_path):
         image,
     )
     assert {path.name for path in outputs} == {
-        "semantic_map.ply", "semantic_objects.json", "semantic_map_view.png",
+        "semantic_map.ply", "semantic_map.pcd", "semantic_objects.json",
+        "semantic_map_view.png",
     }
     payload = json.loads((tmp_path / "semantic_objects.json").read_text("utf-8"))
     assert payload["coordinate_frame"] == "px4_local_ned"
     assert payload["objects"][0]["id"] == "tree-001"
     assert "element vertex 2" in (tmp_path / "semantic_map.ply").read_text("ascii")
+    assert "POINTS 2" in (tmp_path / "semantic_map.pcd").read_text("ascii")
 
 
 def test_map_page_filters_semantic_labels_by_class(qtbot):

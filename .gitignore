@@ -10,6 +10,7 @@ venv/
 
 # ROS2 / colcon
 build/
+dist/
 install/
 log/
 

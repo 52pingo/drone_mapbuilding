@@ -24,6 +24,7 @@ class MapFeed(QObject):
         self._started_at = 0.0
         self._last_received = 0.0
         self._last_state = ""
+        self._offline = False
 
     def start(self, session: dict) -> bool:
         value = session.get("map_dir")
@@ -35,6 +36,10 @@ class MapFeed(QObject):
         self._started_at = time.monotonic()
         self._last_received = 0.0
         self._last_state = ""
+        self._offline = bool(session.get("offline", False))
+        if self._offline and not (self.directory / "latest.json").is_file():
+            self._emit_state("warning", "该 Session 没有三维 OctoMap 快照")
+            return True
         self._emit_state("running", "等待首个 OctoMap 快照")
         self.timer.start()
         return True
@@ -65,7 +70,8 @@ class MapFeed(QObject):
             self._emit_state("warning", "地图状态文件暂不可读")
             return
         if sequence == self._last_sequence:
-            if self._last_received and time.monotonic() - self._last_received > 4.0:
+            if (not self._offline and self._last_received
+                    and time.monotonic() - self._last_received > 4.0):
                 self._emit_state("warning", "OctoMap 超过 4 秒未更新")
             return
         point_name = Path(str(metadata.get("points", ""))).name
@@ -81,4 +87,8 @@ class MapFeed(QObject):
         self._last_sequence = sequence
         self._last_received = time.monotonic()
         self.snapshot_ready.emit(points, metadata)
-        self._emit_state("running", f"{len(points):,} 点 · NED 实时地图")
+        if self._offline:
+            self.timer.stop()
+            self._emit_state("ready", f"{len(points):,} 点 · NED 离线地图")
+        else:
+            self._emit_state("running", f"{len(points):,} 点 · NED 实时地图")

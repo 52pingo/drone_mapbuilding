@@ -1,10 +1,11 @@
 # Qt 无人机避障建图工作站：功能与实施方案
 
-> 实施状态（2026-08-18）：M1–M4 已实现，完成 PySide6 主窗口、本地/WSL 动态
+> 实施状态（2026-08-18）：M1–M5 已实现，完成 PySide6 主窗口、本地/WSL 动态
 > 自检、NED 航点编辑、结构化飞行遥测、Hold/Resume/Safe Land，以及 AirSim RGB、
 > YOLO 框、类别证据和首次发现截图的实时共享文件协议。已用 `best.pt` 做真实图片
 > 端到端验证；M4 已加入 OctoMap 原子快照、三维点云/轨迹、语义反投影与稳定标签、
-> PLY/JSON/PNG 导出和离线 Session。GUI 大环线与真实连续点云仍是现场验收项。
+> PLY/PCD/JSON/PNG/HTML 导出、BT 任务导出、Session 清单、遥测时间轴、旧任务恢复
+> 和 PyInstaller 发布目录。M4 真实连续点云和 M5 Windows EXE 已完成现场验收。
 
 ## 1. 产品目标
 
@@ -168,16 +169,17 @@ sessions/<timestamp>_<mission>/
 
 ### M4：实时 3D 语义地图（7–10 天）
 
-状态：功能实现与自动化验证完成；已在 Windows OpenGL 下验证 24,300 点、5 个三维
-语义标签和 PLY/JSON 导出，等待完整 UE4/PX4 大环线现场验收。
+状态：已完成。真实 CityPark 验收包含约 5 Hz 点云、29,651 个占据点、TF 出生点
+校准、7 个三维语义标签和 PLY/PCD/JSON/PNG 导出。
 
 - 点云增量显示、无人机位姿、语义反投影/聚类、3D 标签。
 - 验收：关闭/开启类别可筛选点云标签；同一静态物体不会随每帧无限复制。
 
 ### M5：导出、回放与交付（4–6 天）
 
-- 状态：M4 已提前完成 PLY/JSON/PNG 和当前快照离线打开；PCD/BT/HTML、完整遥测回放、
-  异常恢复和 PyInstaller 打包仍待实现。
+- 状态：已完成。任务自动写入 manifest/mission、模型哈希、遥测 JSONL/CSV、PCD/PLY、
+  BT、语义 JSON、PNG 和离线 HTML；成果中心提供时间轴回放与后台归档恢复；已构建并
+  运行 PyInstaller Windows 发布目录。新任务 BT 自动落盘等待下一次大环线随飞验收。
 - PCD/PLY/BT/JSON/PNG/HTML 导出、Session 回放、异常恢复、打包。
 - 验收：导出的 Session 可在无 UE4/ROS 环境中重新打开并查看。
 

@@ -9,7 +9,9 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication
 
 from drone_gui.main_window import MainWindow
+from drone_gui.app_paths import application_root
 from drone_gui.models import RuntimeConfig
+from drone_gui.sessions import session_payload
 from drone_gui.theme import APP_STYLESHEET
 
 
@@ -28,7 +30,7 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = application_root()
     default_config = repo_root / "config" / "gui_config.json"
     config_path = args.config or (default_config if default_config.is_file() else None)
     config = RuntimeConfig.load(config_path, repo_root)
@@ -44,12 +46,7 @@ def main(argv=None) -> int:
     window.shell.show_page(3 if args.session_dir else args.page)
     if args.session_dir:
         root = args.session_dir.resolve()
-        session = {
-            "result_root": str(root),
-            "semantic_dir": str(root / "detected_classes"),
-            "live_dir": str(root / "live_feed"),
-            "map_dir": str(root / "live_map"),
-        }
+        session = session_payload(root, offline=True)
         window.perception.start(session)
         window.results_page.start_session(session)
     window.show()

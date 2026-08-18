@@ -133,3 +133,35 @@ def write_ply(path: Path, points, semantic_objects=()) -> None:
                 f"{float(north):.4f} {float(east):.4f} {-float(down):.4f} "
                 f"238 180 74 {index}\n"
             )
+
+
+def write_pcd(path: Path, points, semantic_objects=()) -> None:
+    """Export an ASCII PCD scene in north/east/height-up coordinates."""
+    values = np.asarray(points, dtype=np.float32).reshape((-1, 3))
+    markers = [
+        item for item in semantic_objects
+        if isinstance(item, dict) and len(item.get("position_ned", [])) == 3
+    ]
+    count = len(values) + len(markers)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="ascii", newline="\n") as output:
+        output.write("# .PCD v0.7 - Point Cloud Data file format\n")
+        output.write("VERSION 0.7\n")
+        output.write("FIELDS x y z red green blue semantic_id\n")
+        output.write("SIZE 4 4 4 1 1 1 4\n")
+        output.write("TYPE F F F U U U I\n")
+        output.write("COUNT 1 1 1 1 1 1 1\n")
+        output.write(f"WIDTH {count}\nHEIGHT 1\n")
+        output.write("VIEWPOINT 0 0 0 1 0 0 0\n")
+        output.write(f"POINTS {count}\nDATA ascii\n")
+        for point in values:
+            output.write(
+                f"{point[0]:.4f} {point[1]:.4f} {-point[2]:.4f} "
+                "54 154 188 -1\n"
+            )
+        for index, item in enumerate(markers):
+            north, east, down = item["position_ned"]
+            output.write(
+                f"{float(north):.4f} {float(east):.4f} {-float(down):.4f} "
+                f"238 180 74 {index}\n"
+            )

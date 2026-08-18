@@ -4,7 +4,7 @@ import numpy as np
 
 from scripts.map_bridge_core import (
     MapSnapshotWriter, finite_downsample, world_enu_to_local_ned,
-    world_enu_to_ned, write_ply,
+    world_enu_to_ned, write_pcd, write_ply,
 )
 
 
@@ -48,3 +48,14 @@ def test_ply_export_includes_occupancy_and_semantic_vertices(tmp_path):
     assert "element vertex 2" in text
     assert "1.0000 2.0000 3.0000" in text
     assert "4.0000 5.0000 6.0000" in text
+
+
+def test_pcd_export_includes_semantic_marker(tmp_path):
+    target = tmp_path / "semantic_map.pcd"
+    write_pcd(target, [[1, 2, -3]], [{
+        "label": "tree", "position_ned": [4, 5, -6],
+    }])
+    text = target.read_text(encoding="ascii")
+    assert "FIELDS x y z red green blue semantic_id" in text
+    assert "POINTS 2" in text
+    assert "4.0000 5.0000 6.0000 238 180 74 0" in text

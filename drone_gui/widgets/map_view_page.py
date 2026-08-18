@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 import numpy as np
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton,
-    QSlider, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QMessageBox, QVBoxLayout, QWidget,
 )
 
 from drone_gui.map_export import export_map
 from drone_gui.map_feed import MapFeed
 from drone_gui.widgets.map_3d_widget import Map3DWidget
+from drone_gui.widgets.map_controls import MapControls
+from drone_gui.widgets.replay_panel import ReplayPanel
 from drone_gui.widgets.status_badge import StatusBadge
 
 
@@ -21,6 +22,9 @@ class MapViewPage(QWidget):
         self.feed = MapFeed(self)
         self.view = Map3DWidget()
         self.status = StatusBadge("等待地图 Session")
+        self.replay = ReplayPanel()
+        self.controls = MapControls()
+        self.class_filter = self.controls.class_filter
         self.metrics = {
             "points": QLabel("0 点"),
             "path": QLabel("0 轨迹点"),
@@ -33,8 +37,19 @@ class MapViewPage(QWidget):
         self.session_root: Path | None = None
         self._auto_fitted = False
         self._build_layout()
+        self.replay.setVisible(False)
         self.feed.snapshot_ready.connect(self._update_map)
         self.feed.state_changed.connect(self.status.set_state)
+        self.replay.frame_changed.connect(self._apply_replay_frame)
+        self.controls.fit_requested.connect(self.view.fit_scene)
+        self.controls.top_view_requested.connect(self.view.top_view)
+        self.controls.map_visibility_changed.connect(self.view.map_item.setVisible)
+        self.controls.path_visibility_changed.connect(self.view.set_path_visible)
+        self.controls.semantic_visibility_changed.connect(
+            self.view.set_semantics_visible
+        )
+        self.controls.point_size_changed.connect(self.view.set_point_size)
+        self.controls.export_requested.connect(self.export_current)
 
     def _build_layout(self) -> None:
         header = QFrame()
@@ -50,53 +65,15 @@ class MapViewPage(QWidget):
         row.addStretch()
         row.addWidget(self.status)
 
-        controls = QFrame()
-        controls.setProperty("role", "panel")
-        actions = QHBoxLayout(controls)
-        actions.setContentsMargins(14, 8, 14, 8)
-        fit_button = QPushButton("适配地图")
-        fit_button.clicked.connect(self.view.fit_scene)
-        top_button = QPushButton("俯视")
-        top_button.clicked.connect(self.view.top_view)
-        self.map_toggle = self._toggle("占用点云", self.view.map_item.setVisible)
-        self.path_toggle = self._toggle("飞行轨迹", self.view.set_path_visible)
-        self.semantic_toggle = self._toggle("语义目标", self.view.set_semantics_visible)
-        self.class_filter = QComboBox()
-        self.class_filter.setAccessibleName("三维语义目标类别筛选")
-        self.class_filter.addItem("全部类别")
         self.class_filter.currentTextChanged.connect(self._render_semantics)
-        point_size = QSlider(Qt.Horizontal)
-        point_size.setRange(8, 50)
-        point_size.setValue(22)
-        point_size.setMaximumWidth(120)
-        point_size.setAccessibleName("三维点云点大小")
-        point_size.valueChanged.connect(self.view.set_point_size)
-        export_button = QPushButton("导出 PLY / JSON / PNG")
-        export_button.setProperty("kind", "primary")
-        export_button.clicked.connect(self.export_current)
-        for widget in (
-            fit_button, top_button, self.map_toggle, self.path_toggle,
-            self.semantic_toggle, self.class_filter,
-        ):
-            actions.addWidget(widget)
-        actions.addWidget(QLabel("点大小"))
-        actions.addWidget(point_size)
-        actions.addStretch()
-        actions.addWidget(export_button)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
         layout.addWidget(header)
         layout.addWidget(self.view, 1)
-        layout.addWidget(controls)
-
-    @staticmethod
-    def _toggle(text: str, callback) -> QCheckBox:
-        toggle = QCheckBox(text)
-        toggle.setChecked(True)
-        toggle.toggled.connect(callback)
-        return toggle
+        layout.addWidget(self.replay)
+        layout.addWidget(self.controls)
 
     def start_session(self, session: dict) -> None:
         root = session.get("result_root")
@@ -111,7 +88,30 @@ class MapViewPage(QWidget):
         self.class_filter.clear()
         self.class_filter.addItem("全部类别")
         self._refresh_metrics()
+        offline = bool(session.get("offline", False))
+        self.replay.setVisible(offline)
+        if offline and self.session_root is not None:
+            self.replay.load(self.session_root)
+            self._load_offline_semantics()
         self.feed.start(session)
+
+    def _load_offline_semantics(self) -> None:
+        if self.session_root is None:
+            return
+        candidates = (
+            self.session_root / "semantic_objects.json",
+            self.session_root / "detected_classes" / "semantic_objects.json",
+        )
+        for path in candidates:
+            if not path.is_file():
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            values = payload.get("objects", []) if isinstance(payload, dict) else []
+            self.update_semantics({"semantic_objects": values})
+            return
 
     def stop(self, message: str = "任务结束，保留最终地图") -> None:
         self.feed.stop(message)
@@ -139,6 +139,11 @@ class MapViewPage(QWidget):
             return
         self.trajectory.append(point)
         self.trajectory = self.trajectory[-5000:]
+        self.view.set_trajectory(self.trajectory)
+        self._refresh_metrics()
+
+    def _apply_replay_frame(self, _payload: dict, history) -> None:
+        self.trajectory = [list(point) for point in history]
         self.view.set_trajectory(self.trajectory)
         self._refresh_metrics()
 

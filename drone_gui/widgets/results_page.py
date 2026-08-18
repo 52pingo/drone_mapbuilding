@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
@@ -17,17 +17,20 @@ from PySide6.QtWidgets import (
 )
 
 from drone_gui.sessions import scan_sessions
-
-
-PATH_ROLE = Qt.UserRole + 1
+from drone_gui.session_recovery import SessionRecoveryController
+from drone_gui.widgets.results_tree import (
+    PATH_ROLE, SESSION_ROLE, STATUS_ROLE, populate_session_tree,
+)
 
 
 class ResultsPage(QWidget):
+    session_open_requested = Signal(object)
+
     def __init__(self, results_dir: Path, parent=None) -> None:
         super().__init__(parent)
         self.results_dir = results_dir
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Session / 类别 / 文件", "数量"])
+        self.tree.setHeaderLabels(["Session / 类别 / 文件", "状态", "数量"])
         self.tree.setAccessibleName("任务成果目录")
         self.tree.currentItemChanged.connect(self._selection_changed)
         self.preview = QLabel("选择带框图片、深度图、轨迹图或地图进行预览")
@@ -39,6 +42,9 @@ class ResultsPage(QWidget):
         self.detail.setWordWrap(True)
         self.detail.setProperty("role", "muted")
         self._pixmap: QPixmap | None = None
+        self._selected_session: Path | None = None
+        self._selected_status = ""
+        self.recovery = SessionRecoveryController(self)
         self._build_layout()
         self.refresh()
 
@@ -53,9 +59,22 @@ class ResultsPage(QWidget):
         refresh_button.clicked.connect(self.refresh)
         open_button = QPushButton("打开成果目录")
         open_button.clicked.connect(self._open_results)
+        self.replay_button = QPushButton("在三维回放中打开")
+        self.replay_button.setProperty("kind", "primary")
+        self.replay_button.setAccessibleName("在三维地图中打开所选任务 Session")
+        self.replay_button.setEnabled(False)
+        self.replay_button.clicked.connect(self._open_selected_session)
+        self.recover_button = QPushButton("修复未完成归档")
+        self.recover_button.setAccessibleName("恢复所选任务的清单、遥测和报告")
+        self.recover_button.setEnabled(False)
+        self.recover_button.clicked.connect(self._recover_selected_session)
+        self.recovery.state_changed.connect(self._recovery_state)
+        self.recovery.recovered.connect(lambda _manifest: self.refresh())
         actions = QHBoxLayout()
         actions.addWidget(refresh_button)
         actions.addWidget(open_button)
+        actions.addWidget(self.replay_button)
+        actions.addWidget(self.recover_button)
         browser_layout.addWidget(title)
         browser_layout.addWidget(self.tree, 1)
         browser_layout.addLayout(actions)
@@ -81,6 +100,9 @@ class ResultsPage(QWidget):
 
     def refresh(self) -> None:
         self.tree.clear()
+        self._selected_session = None
+        self.replay_button.setEnabled(False)
+        self.recover_button.setEnabled(False)
         sessions = scan_sessions(self.results_dir)
         if not sessions:
             empty = QTreeWidgetItem(["暂无可预览成果", "0"])
@@ -88,36 +110,33 @@ class ResultsPage(QWidget):
             self.tree.addTopLevelItem(empty)
             self.detail.setText(f"扫描目录：{self.results_dir}")
             return
-        for session in sessions:
-            root = QTreeWidgetItem([session.path.name, str(session.image_count)])
-            root.setData(0, PATH_ROLE, str(session.path))
-            self.tree.addTopLevelItem(root)
-            for class_name, images in session.class_images.items():
-                class_item = QTreeWidgetItem([class_name, str(len(images))])
-                root.addChild(class_item)
-                for image in images:
-                    item = QTreeWidgetItem([image.name, ""])
-                    item.setData(0, PATH_ROLE, str(image))
-                    class_item.addChild(item)
-            if session.map_images:
-                maps = QTreeWidgetItem(["地图 / 深度 / 轨迹", str(len(session.map_images))])
-                root.addChild(maps)
-                for image in session.map_images:
-                    item = QTreeWidgetItem([image.name, ""])
-                    item.setData(0, PATH_ROLE, str(image))
-                    maps.addChild(item)
+        populate_session_tree(self.tree, sessions)
         self.tree.expandToDepth(0)
         self.detail.setText(f"已载入 {len(sessions)} 个 Session · {self.results_dir}")
 
     def _selection_changed(self, current, _previous) -> None:
         if current is None:
             return
+        session_value = current.data(0, SESSION_ROLE)
+        self._selected_session = Path(session_value) if session_value else None
+        root_item = current
+        while root_item.parent() is not None:
+            root_item = root_item.parent()
+        status_value = root_item.data(0, STATUS_ROLE)
+        self._selected_status = str(status_value or "")
+        self.replay_button.setEnabled(self._selected_session is not None)
+        self.recover_button.setEnabled(
+            self._selected_session is not None
+            and self._selected_status not in {"completed", "running"}
+        )
         value = current.data(0, PATH_ROLE)
         if not value:
             return
         path = Path(value)
         if not path.is_file() or path.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
-            self.detail.setText(str(path))
+            self.detail.setText(
+                f"{path}\n选择“在三维回放中打开”可载入最终点云和遥测时间轴。"
+            )
             return
         self._pixmap = QPixmap(str(path))
         self._update_preview()
@@ -137,3 +156,18 @@ class ResultsPage(QWidget):
 
     def _open_results(self) -> None:
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.results_dir)))
+
+    def _open_selected_session(self) -> None:
+        if self._selected_session is not None:
+            self.session_open_requested.emit(self._selected_session)
+
+    def _recover_selected_session(self) -> None:
+        if self._selected_session is None:
+            return
+        if self.recovery.recover(self._selected_session):
+            self.recover_button.setEnabled(False)
+
+    def _recovery_state(self, state: str, message: str) -> None:
+        self.detail.setText(message)
+        if state != "running":
+            self.recover_button.setEnabled(self._selected_session is not None)

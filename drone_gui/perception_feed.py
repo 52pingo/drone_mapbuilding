@@ -26,6 +26,7 @@ class PerceptionFeed(QObject):
         self._started_at = 0.0
         self._last_received = 0.0
         self._last_state = ""
+        self._offline = False
 
     def start(self, session: dict) -> bool:
         live_dir = session.get("live_dir")
@@ -39,6 +40,10 @@ class PerceptionFeed(QObject):
         self._started_at = time.monotonic()
         self._last_received = 0.0
         self._last_state = ""
+        self._offline = bool(session.get("offline", False))
+        if self._offline and not (self.live_dir / "latest.json").is_file():
+            self._emit_state("warning", "该 Session 没有视觉末帧快照")
+            return True
         self._emit_state("running", "等待 YOLO 首帧")
         self.timer.start()
         return True
@@ -69,7 +74,8 @@ class PerceptionFeed(QObject):
             self._emit_state("warning", "视觉状态文件暂不可读")
             return
         if frame_index == self._last_frame_index:
-            if self._last_received and time.monotonic() - self._last_received > 3.0:
+            if (not self._offline and self._last_received
+                    and time.monotonic() - self._last_received > 3.0):
                 self._emit_state("warning", "视觉流超过 3 秒未更新")
             return
         image_name = Path(str(snapshot.get("image", "frame.jpg"))).name
@@ -99,7 +105,11 @@ class PerceptionFeed(QObject):
         self.snapshot_ready.emit(snapshot)
         fps = float(snapshot.get("fps", 0.0))
         count = len(snapshot.get("detections", []))
-        self._emit_state("running", f"{fps:.1f} FPS · {count} 个目标")
+        if self._offline:
+            self.timer.stop()
+            self._emit_state("ready", f"离线末帧 · {count} 个目标")
+        else:
+            self._emit_state("running", f"{fps:.1f} FPS · {count} 个目标")
 
     def _resolve_catalog(self, values) -> list[dict]:
         catalog = []

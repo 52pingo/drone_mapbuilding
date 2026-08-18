@@ -69,7 +69,7 @@ scripts/
   build_uav_semantic_dataset.py           合并/映射训练集
   collect_citypark_semantic_dataset.py    AirSim 分割标签采集
   train_uav_semantic.py                   Ultralytics 训练入口
-drone_gui/                                PySide6 桌面工作站（M4 三维语义地图）
+drone_gui/                                PySide6 桌面工作站（M5 归档与回放）
 tests/                                    VFH 与语义证据测试
 ```
 
@@ -381,9 +381,9 @@ reset 服务在当前组合中并不可靠，重启能同时清理 EKF 原点和
 `max_images_per_class`。类别必须连续出现指定帧数，且同类保存受时间间隔和数量上限
 控制。错误详情在 `detected_classes/perception_error.log`。
 
-## Qt GUI（M4 实时三维语义地图已接入）
+## Qt GUI（M5 Session 归档、回放与打包已接入）
 
-当前已实现可运行的 M1–M4 桌面工作站：
+当前已实现可运行的 M1–M5 桌面工作站：
 
 - 深色工业控制风格主窗口、键盘可达的四页导航和统一状态栏；
 - UE4、工程、视觉 Python、AirSim Client、权重、WSL 和成果目录本地自检；
@@ -403,8 +403,15 @@ reset 服务在当前组合中并不可靠，重启能同时清理 EKF 原点和
   俯视、图层开关和点大小控制；
 - YOLO 框中心结合 `DepthPerspective`、相机 FOV、同步相机位置和姿态反投影到 NED，
   同类近邻观测合并为稳定对象 ID，并以彩色三维标签叠加到地图；
-- 一键导出 `semantic_map.ply`、`semantic_objects.json` 和当前三维视图 PNG；任务结束时
-  自动落盘 PLY/JSON，也可用 `--session-dir` 在没有 UE4/ROS 的情况下打开已有快照；
+- 一键导出 `semantic_map.ply`、`semantic_map.pcd`、`semantic_objects.json` 和当前
+  三维视图 PNG；任务结束时自动归档，也可用 `--session-dir` 在没有 UE4/ROS 的
+  情况下打开已有快照；
+- 每次任务写入 `manifest.json`、`mission.json`、模型 SHA-256、遥测 JSONL/CSV、
+  成果哈希清单与无需网络的 `report.html`；OctoMap 同时保存 BT；
+- 成果中心可直接把任意 Session 打开到三维页，播放/暂停、拖动时间轴并以
+  0.5×–8× 回放完整遥测轨迹；旧版 `avoid_flight.log` 也可恢复；
+- 未完成或旧版归档可在后台线程修复，界面不会冻结；只有 `DONE + disarmed` 才会
+  标记为 `completed`，否则保留为 `incomplete/interrupted/failed`；
 - Hold、Resume 和二次确认的安全 Land；Hold 仅在导航/扫描阶段可用，Land 复用原有
   接地稳定判定与普通 disarm 闭环，不提供空中强制解除锁定；
 - 实时感知页面的数据接口，以及已有类别图片、深度图、轨迹图、OctoMap 浏览；
@@ -412,6 +419,8 @@ reset 服务在当前组合中并不可靠，重启能同时清理 EKF 原点和
 
 M4 的真实 CityPark 点云、坐标校准、YOLO 语义叠加和 PLY/JSON/PNG 导出验收见
 [`docs/VALIDATION_2026-08-18_M4.md`](docs/VALIDATION_2026-08-18_M4.md)。
+M5 的 Session 恢复、遥测回放、PCD/HTML 和 Windows EXE 验收见
+[`docs/VALIDATION_2026-08-18_M5.md`](docs/VALIDATION_2026-08-18_M5.md)。
 
 建立并启动独立环境：
 
@@ -443,6 +452,25 @@ $guiTests = Get-ChildItem .\tests\test_gui_*.py | Select-Object -Expand FullName
 .\scripts\start_gui.bat -SmokeTest
 ```
 
+构建免 Python GUI 发布目录：
+
+```powershell
+.\.venv-gui\Scripts\python.exe -m pip install `
+  --index-url https://pypi.org/simple -r requirements-build.txt
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\build_gui.ps1
+
+# 输出：dist\DroneMapbuilding\ 和 dist\DroneMapbuilding-win64.zip
+# 把 best.pt 放到 EXE 同目录，并复制/修改 config\gui_config.example.json。
+```
+
+异常退出或旧版本任务可从命令行重建 Session；此操作不会伪造闭环状态：
+
+```powershell
+.\.venv-gui\Scripts\python.exe .\scripts\session_archive.py recover `
+  --root .\results\citypark_semantic_YYYYMMDD_HHMMSS
+```
+
 “系统与自检”中的“本地 + WSL 动态检查”必须完成且所有必需组件通过，GUI 才允许
 开始任务。任务运行时，ROS2 提供以下 `std_srvs/Trigger` 服务：
 
@@ -461,9 +489,10 @@ $guiTests = Get-ChildItem .\tests\test_gui_*.py | Select-Object -Expand FullName
 `latest.json`，GUI 每 500 ms 非阻塞检查一次；超过 4 秒没有新快照会显示明确告警。
 坐标元数据始终声明 `px4_local_ned`，渲染和 PLY 导出时仅把 Down 取反为向上高度。
 
-M4 已完成 Windows OpenGL 三维渲染、24,300 点压力样例、三维语义标签、离线 Session、
-PLY/JSON 导出和 WSL ROS2 导入验证。仍需在 UE4/PX4 全链路运行时完成一次从 GUI
-启动的大环线飞行，现场核对持续 RGB、真实 OctoMap 快照、轨迹和最终自动导出。
+M4 已完成真实 CityPark 深度、约 5 Hz OctoMap、29,651 点和 7 个三维语义标签验收。
+M5 已用 756 秒历史完整飞行恢复 1,524 帧回放，并实际构建、启动 Windows EXE。
+新加入的 BT 与全套 Session 自动归档会在下一次 GUI 大环线中随任务结束自动执行；
+现阶段无需为验证回放而重复飞行该耗时航线。
 
 ### 后续规划
 

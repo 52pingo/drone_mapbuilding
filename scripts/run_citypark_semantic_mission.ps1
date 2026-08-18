@@ -37,11 +37,27 @@ $SemanticDir = Join-Path $ResultRoot 'detected_classes'
 $LiveDir = Join-Path $ResultRoot 'live_feed'
 $MapDir = Join-Path $ResultRoot 'live_map'
 $StopFile = Join-Path $ResultRoot 'semantic_stop.signal'
+$ArchiveScript = Join-Path $PSScriptRoot 'session_archive.py'
 New-Item -ItemType Directory -Force -Path $SemanticDir | Out-Null
 New-Item -ItemType Directory -Force -Path $LiveDir | Out-Null
 New-Item -ItemType Directory -Force -Path $MapDir | Out-Null
 if (Test-Path -LiteralPath $StopFile) {
     Remove-Item -LiteralPath $StopFile -Force
+}
+
+$archiveInitArgs = @(
+    $ArchiveScript, 'init',
+    '--root', $ResultRoot,
+    '--name', 'CityPark 大环线',
+    '--goals', $Goals,
+    '--flight-z', $FlightZ.ToString([Globalization.CultureInfo]::InvariantCulture),
+    '--max-mission-time', $MaxMissionTime.ToString([Globalization.CultureInfo]::InvariantCulture),
+    '--weights', $Weights,
+    '--confidence', $Confidence.ToString([Globalization.CultureInfo]::InvariantCulture)
+)
+& $Python @archiveInitArgs
+if ($LASTEXITCODE -ne 0) {
+    throw "Session initialization failed with exit code $LASTEXITCODE"
 }
 
 $PerceptionScript = Join-Path $PSScriptRoot 'semantic_perception.py'
@@ -75,6 +91,8 @@ $perception = Start-Process -FilePath $Python -ArgumentList $perceptionArgs `
     -RedirectStandardOutput $SemanticLog `
     -RedirectStandardError $SemanticErrorLog
 
+$MissionSucceeded = $false
+$PerceptionFailure = $null
 try {
     if ($ResultRoot -notmatch '^[A-Za-z]:\\') {
         throw "Result path is not an absolute Windows drive path: $ResultRoot"
@@ -110,6 +128,7 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "CityPark mission failed with exit code $LASTEXITCODE"
     }
+    $MissionSucceeded = $true
 }
 finally {
     $env:WSLENV = $previousWslEnv
@@ -128,8 +147,22 @@ finally {
     $perception.Refresh()
     $perceptionExitCode = $perception.ExitCode
     if ($null -eq $perceptionExitCode -or $perceptionExitCode -ne 0) {
-        throw "Semantic perception failed with exit code $perceptionExitCode; see $SemanticErrorLog"
+        $PerceptionFailure = "Semantic perception failed with exit code $perceptionExitCode; see $SemanticErrorLog"
     }
+
+    $archiveStatus = if ($MissionSucceeded -and $null -eq $PerceptionFailure) {
+        'completed'
+    } else {
+        'failed'
+    }
+    & $Python $ArchiveScript finalize --root $ResultRoot --status $archiveStatus
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Session finalization failed with exit code $LASTEXITCODE"
+    }
+}
+
+if ($null -ne $PerceptionFailure) {
+    throw $PerceptionFailure
 }
 
 Write-Host "Mission and semantic evidence complete -> $ResultRoot"

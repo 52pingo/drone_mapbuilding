@@ -73,7 +73,7 @@ class ControlShell(QWidget):
             layout.addWidget(button)
         self.nav_buttons[0].setChecked(True)
         layout.addStretch()
-        version = QLabel("GUI M4 · v0.4.0\n坐标系：PX4 Local NED")
+        version = QLabel("GUI M5 · v0.5.0\n坐标系：PX4 Local NED")
         version.setProperty("role", "muted")
         layout.addWidget(version)
         return sidebar
