@@ -142,6 +142,9 @@ pip install -r requirements-perception.txt
 
 还需让该环境能导入 AirSim PythonClient。可以在 AirSim `PythonClient` 目录执行
 `pip install -e .`，也可以在启动参数中传入 `-AirSimClientPath`。
+AirSim 1.8.1 的 `msgpack-rpc-python`/Tornado 4 属于旧依赖；仓库的兼容导入器会在
+非 TLS 的本地 RPC 导入阶段规避 Windows 异常证书，并依次查找仓库内及仓库上级的
+`.tools/airsim_rpc`。因此既可正常安装 PythonClient，也可把离线依赖放到该目录。
 
 ### 4. 放置视觉权重
 
@@ -393,8 +396,9 @@ reset 服务在当前组合中并不可靠，重启能同时清理 EKF 原点和
   深度、滚动 FPS 和当前分辨率，不会用大体积图像阻塞控制台或 Qt 主线程；
 - 实时页显示完整带框画面、本帧目标、累计确认类别、证据数量和每类首次发现截图；
 - 视觉流超过 3 秒未更新时明确显示断流告警，任务结束后保留最后一帧供复核；
-- WSL 地图桥接订阅 `/octomap_point_cloud_centers`，把 `world_enu` 正确转换为 PX4
-  本地 NED，按 1 Hz 限流、最多 80,000 点降采样并原子发布 NPY + JSON 快照；
+- WSL 地图桥接订阅 `/octomap_point_cloud_centers`，先转换 `world_enu` 轴，再从 TF
+  自动读取 `world_ned -> PX4` 出生点平移并转换为 PX4 本地 NED；按 1 Hz 限流、
+  最多 80,000 点降采样并原子发布 NPY + JSON 快照；
 - 三维页实时显示占用点云、无人机轨迹和当前位置，支持鼠标旋转/缩放、适配地图、
   俯视、图层开关和点大小控制；
 - YOLO 框中心结合 `DepthPerspective`、相机 FOV、同步相机位置和姿态反投影到 NED，
@@ -405,6 +409,9 @@ reset 服务在当前组合中并不可靠，重启能同时清理 EKF 原点和
   接地稳定判定与普通 disarm 闭环，不提供空中强制解除锁定；
 - 实时感知页面的数据接口，以及已有类别图片、深度图、轨迹图、OctoMap 浏览；
 - 只有日志明确出现 `MISSION DONE` 才把任务标记为闭环完成；关闭 GUI 不会强杀飞行任务。
+
+M4 的真实 CityPark 点云、坐标校准、YOLO 语义叠加和 PLY/JSON/PNG 导出验收见
+[`docs/VALIDATION_2026-08-18_M4.md`](docs/VALIDATION_2026-08-18_M4.md)。
 
 建立并启动独立环境：
 

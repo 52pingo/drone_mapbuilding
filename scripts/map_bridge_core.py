@@ -20,6 +20,13 @@ def world_enu_to_ned(points) -> np.ndarray:
     )
 
 
+def world_enu_to_local_ned(points, world_origin_ned=(0.0, 0.0, 0.0)) -> np.ndarray:
+    """Convert world ENU points into PX4 local NED coordinates."""
+    converted = world_enu_to_ned(points)
+    origin = np.asarray(world_origin_ned, dtype=np.float32).reshape(3)
+    return (converted - origin).astype(np.float32, copy=False)
+
+
 def finite_downsample(points, max_points: int) -> np.ndarray:
     """Drop invalid rows and deterministically limit rendering payload size."""
     if max_points < 1:
@@ -52,11 +59,17 @@ class MapSnapshotWriter:
         self.sequence = 0
         self.directory.mkdir(parents=True, exist_ok=True)
 
-    def publish(self, world_enu_points, frame_id: str = "world_enu") -> dict:
+    def publish(
+        self,
+        world_enu_points,
+        frame_id: str = "world_enu",
+        world_origin_ned=(0.0, 0.0, 0.0),
+    ) -> dict:
         self.sequence += 1
         original_count = len(world_enu_points)
         points = finite_downsample(
-            world_enu_to_ned(world_enu_points), self.max_points
+            world_enu_to_local_ned(world_enu_points, world_origin_ned),
+            self.max_points,
         )
         name = f"points_{self.sequence:06d}.npy"
         temporary = self.directory / (name + ".tmp")
@@ -69,6 +82,9 @@ class MapSnapshotWriter:
             "captured_at": time.time(),
             "source_frame": frame_id,
             "coordinate_frame": "px4_local_ned",
+            "world_origin_ned": [
+                round(float(value), 6) for value in world_origin_ned
+            ],
             "original_count": int(original_count),
             "point_count": int(len(points)),
             "bounds": bounds_payload(points),

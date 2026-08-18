@@ -4,9 +4,13 @@
 import argparse
 import math
 import socket
-import sys
 import time
 from pathlib import Path
+
+try:
+    from scripts.airsim_compat import import_airsim
+except ImportError:
+    from airsim_compat import import_airsim
 
 
 RPC_DEPS = str(Path(__file__).resolve().parents[1] / ".tools" / "airsim_rpc")
@@ -29,8 +33,7 @@ def main():
     parser.add_argument("--depth-breaking-volume", default=DEPTH_BREAKING_VOLUME)
     args = parser.parse_args()
 
-    sys.path[:0] = [args.airsim_rpc_vendor, args.airsim_client]
-    import airsim
+    airsim = import_airsim(args.airsim_client, args.airsim_rpc_vendor)
 
     deadline = time.monotonic() + args.timeout_seconds
     while True:

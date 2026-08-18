@@ -73,10 +73,11 @@ PX4 SITL ⇄ AirSim/UE4 ⇄ 深度/RGB ⇄ VFH/OctoMap/YOLO
 ### 4.2 实时地图桥接
 
 M4 已订阅 `/octomap_point_cloud_centers`，使用可靠、Transient Local QoS 接收 OctoMap
-占用点中心；后端把 `world_enu` 转为 `px4_local_ned`，过滤非有限值，确定性限制到
-80,000 点，并以 NPY 先写、JSON 后提交的方式每秒发布快照。GUI 每 500 ms 非阻塞轮询，
-保留断流和无数据状态。首版使用 `pyqtgraph.opengl.GLViewWidget`；点数和交互需求提高后
-再增加体素/范围裁剪或切换 PyVista/VTK。
+占用点中心；后端先执行 `world_enu` 轴变换，再从 TF 读取 `world_ned -> PX4` 的出生点
+平移并转换为真正的 `px4_local_ned`。随后过滤非有限值，确定性限制到 80,000 点，并以
+NPY 先写、JSON 后提交的方式每秒发布快照。GUI 每 500 ms 非阻塞轮询，保留断流和无数据
+状态。首版使用 `pyqtgraph.opengl.GLViewWidget`；点数和交互需求提高后再增加体素/范围
+裁剪或切换 PyVista/VTK。
 
 ### 4.3 三维语义融合
 

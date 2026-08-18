@@ -3,13 +3,21 @@ import json
 import numpy as np
 
 from scripts.map_bridge_core import (
-    MapSnapshotWriter, finite_downsample, world_enu_to_ned, write_ply,
+    MapSnapshotWriter, finite_downsample, world_enu_to_local_ned,
+    world_enu_to_ned, write_ply,
 )
 
 
 def test_world_enu_to_px4_ned_swaps_xy_and_flips_z():
     points = world_enu_to_ned([[1.0, 2.0, 3.0], [-4.0, 5.0, -6.0]])
     np.testing.assert_allclose(points, [[2.0, 1.0, -3.0], [5.0, -4.0, 6.0]])
+
+
+def test_world_enu_to_local_ned_removes_citypark_spawn_translation():
+    points = world_enu_to_local_ned(
+        [[258.15, -134.09, 1.5]], [-134.09, 258.15, -1.5]
+    )
+    np.testing.assert_allclose(points, [[0.0, 0.0, 0.0]], atol=1e-5)
 
 
 def test_downsample_filters_invalid_and_honors_limit():

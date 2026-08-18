@@ -11,17 +11,17 @@ import math
 import os
 from pathlib import Path
 import re
-import ssl
-import sys
 import time
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 try:
+    from scripts.airsim_compat import import_airsim
     from scripts.perception_live import FrameRateMeter, LiveFrameWriter
     from scripts.semantic_geometry import (
         SemanticObjectTracker, project_box_center_ned,
     )
 except ImportError:
+    from airsim_compat import import_airsim
     from perception_live import FrameRateMeter, LiveFrameWriter
     from semantic_geometry import SemanticObjectTracker, project_box_center_ned
 
@@ -162,32 +162,6 @@ def parse_args() -> argparse.Namespace:
         default=str(workspace / ".tools" / "airsim_rpc"),
     )
     return parser.parse_args()
-
-
-def import_airsim(client_path: str, vendor_path: str):
-    """Import the old AirSim RPC client in the local Python 3.8 YOLO env."""
-    for path in (vendor_path, client_path):
-        if path and path not in sys.path:
-            sys.path.append(path)
-
-    # The vendored Tornado 4 client asks Windows for root certificates even
-    # though AirSim RPC is plain localhost TCP. Some local cert stores contain
-    # entries Python 3.8 cannot decode, so avoid certificate loading only while
-    # importing this non-TLS client.
-    original_context = ssl.create_default_context
-
-    def local_only_context(*_args, **_kwargs):
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS)
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-        return context
-
-    ssl.create_default_context = local_only_context
-    try:
-        import airsim  # type: ignore
-    finally:
-        ssl.create_default_context = original_context
-    return airsim
 
 
 def decode_scene(response, cv2, np):
