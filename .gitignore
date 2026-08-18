@@ -5,6 +5,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .venv/
+.venv-gui/
 venv/
 
 # ROS2 / colcon
@@ -21,6 +22,7 @@ datasets/
 
 # Runtime output
 results/
+config/gui_config.json
 logs/
 *.log
 *.pid

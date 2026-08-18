@@ -1,0 +1,16 @@
+{
+  "ue4_editor": "D:\\UE_4.27\\Engine\\Binaries\\Win64\\UE4Editor.exe",
+  "ue4_project": "D:\\CityParkEnvironmentCollec\\CityPark.uproject",
+  "ue4_map": "/Game/CityPark/Maps/Showcase?game=/Script/AirSim.AirSimGameMode",
+  "perception_python": "C:\\Users\\29593\\anaconda3\\envs\\deeplearning\\python.exe",
+  "airsim_client": "D:\\PycharmProjects\\PythonProject19\\AirSim\\PythonClient",
+  "weights": "E:\\无人机视觉避障建图\\best.pt",
+  "results_dir": "E:\\无人机视觉避障建图\\results",
+  "wsl_distro": "Ubuntu-22.04",
+  "wsl_user": "hw",
+  "ros_workspace": "/home/hw/hw-ros2/ros2",
+  "px4_dir": "/home/hw/px4v1.15.2",
+  "micro_xrce_agent": "/home/hw/Micro-XRCE-DDS-Agent/build/MicroXRCEAgent",
+  "log_dir": "/home/hw/logs",
+  "confidence": 0.25
+}

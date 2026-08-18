@@ -1,5 +1,9 @@
 # Qt 无人机避障建图工作站：功能与实施方案
 
+> 实施状态（2026-08-18）：M1 第一版已进入代码实现，完成 PySide6 主窗口、配置模型、
+> 本地自检、QProcess 编排、NED 航点编辑、任务日志和成果浏览。WSL 深度/ROS 动态
+> 自检、实时 RGB 消息和三维点云仍按后续里程碑推进。
+
 ## 1. 产品目标
 
 把现有 PowerShell、WSL/ROS2、AirSim、PX4、VFH、OctoMap 和 YOLO

@@ -69,6 +69,7 @@ scripts/
   build_uav_semantic_dataset.py           合并/映射训练集
   collect_citypark_semantic_dataset.py    AirSim 分割标签采集
   train_uav_semantic.py                   Ultralytics 训练入口
+drone_gui/                                PySide6 桌面工作站（M1）
 tests/                                    VFH 与语义证据测试
 ```
 
@@ -367,7 +368,48 @@ reset 服务在当前组合中并不可靠，重启能同时清理 EKF 原点和
 `max_images_per_class`。类别必须连续出现指定帧数，且同类保存受时间间隔和数量上限
 控制。错误详情在 `detected_classes/perception_error.log`。
 
-## Qt GUI 规划
+## Qt GUI（M1 已启动）
+
+当前已实现第一阶段可运行版本：
+
+- 深色工业控制风格主窗口、键盘可达的四页导航和统一状态栏；
+- UE4、工程、视觉 Python、AirSim Client、权重、WSL 和成果目录本地自检；
+- 使用 `QProcess` 异步启动 UE4、PX4/ROS2 堆栈和完整语义任务，实时汇总日志；
+- NED 航点画布：双击添加、滚轮缩放、拖动画布、表格精确编辑、排序和返航点；
+- 航线距离、预计用时和安全参数校验，航线 JSON 保存/加载；
+- 实时感知与遥测页面的数据接口，以及已有类别图片、深度图、轨迹图、OctoMap 浏览；
+- 只有日志明确出现 `MISSION DONE` 才把任务标记为闭环完成；关闭 GUI 不会强杀飞行任务。
+
+建立并启动独立环境：
+
+```powershell
+py -3.11 -m venv .venv-gui
+.\.venv-gui\Scripts\python.exe -m pip install `
+  --index-url https://pypi.org/simple -r requirements-gui.txt
+Copy-Item .\config\gui_config.example.json .\config\gui_config.json
+# 按本机实际路径修改 gui_config.json
+.\scripts\start_gui.bat
+```
+
+也可以直接执行：
+
+```powershell
+.\.venv-gui\Scripts\python.exe -m drone_gui
+```
+
+GUI 测试和无界面启动检查：
+
+```powershell
+$env:QT_QPA_PLATFORM='offscreen'
+$guiTests = Get-ChildItem .\tests\test_gui_*.py | Select-Object -Expand FullName
+.\.venv-gui\Scripts\python.exe -m pytest $guiTests -q
+.\scripts\start_gui.bat -SmokeTest
+```
+
+当前实时页尚未连接连续 RGB/检测消息，三维页面也尚未实现实时点云渲染；它们分别
+属于 M3 和 M4。现阶段任务按钮会调用已经验证的原脚本，不会自行改写飞控安全逻辑。
+
+### 后续规划
 
 桌面封装的功能架构、三维语义融合、页面规划、技术选型、阶段划分和验收指标见
 [docs/QT_GUI_PLAN.md](docs/QT_GUI_PLAN.md)。核心原则是让 GUI 负责规划、可视化和
