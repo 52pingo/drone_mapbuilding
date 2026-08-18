@@ -8,5 +8,8 @@ import pytest
 @pytest.mark.pep257
 def test_pep257():
     """Check public safety helpers for usable API documentation."""
-    rc = main(argv=['hw_insight/mission_safety.py'])
+    rc = main(argv=[
+        'hw_insight/mission_safety.py',
+        'hw_insight/mission_control.py',
+    ])
     assert rc == 0, 'Found code style errors / warnings'

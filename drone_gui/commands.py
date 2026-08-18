@@ -67,6 +67,32 @@ class CommandBuilder:
         ]
         return CommandSpec("wsl.exe", args, self.config.repo_root)
 
+    def probe_stack(self) -> CommandSpec:
+        script = windows_path_to_wsl(
+            self.config.repo_root / "scripts" / "gui_backend_probe.sh"
+        )
+        args = [
+            "-d", self.config.wsl_distro,
+            "-u", self.config.wsl_user,
+            "--", "env", f"ROS_WORKSPACE={self.config.ros_workspace}",
+            "bash", script,
+        ]
+        return CommandSpec("wsl.exe", args, self.config.repo_root)
+
+    def mission_control(self, action: str) -> CommandSpec:
+        if action not in {"hold", "resume", "land"}:
+            raise ValueError(f"不支持的任务控制: {action}")
+        script = windows_path_to_wsl(
+            self.config.repo_root / "scripts" / "gui_mission_control.sh"
+        )
+        args = [
+            "-d", self.config.wsl_distro,
+            "-u", self.config.wsl_user,
+            "--", "env", f"ROS_WORKSPACE={self.config.ros_workspace}",
+            "bash", script, action,
+        ]
+        return CommandSpec("wsl.exe", args, self.config.repo_root)
+
     def run_mission(self, plan: MissionPlan) -> CommandSpec:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         result_root = self.config.results_dir / f"gui_citypark_{stamp}"

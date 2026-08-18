@@ -8,9 +8,11 @@ MAINTAINED_FILES = [
     'hw_insight/avoid_node.py',
     'hw_insight/avoid_vfh.py',
     'hw_insight/mission_safety.py',
+    'hw_insight/mission_control.py',
     'hw_insight/qgc_mission_runner.py',
     'test_qgc_mission_runner.py',
     'test/test_mission_safety.py',
+    'test/test_mission_control.py',
 ]
 
 

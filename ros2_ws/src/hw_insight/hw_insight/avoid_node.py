@@ -27,6 +27,7 @@ from px4_msgs.msg import (
 )
 from sensor_msgs.msg import Image, CameraInfo, PointCloud2
 from sensor_msgs_py import point_cloud2
+from std_srvs.srv import Trigger
 
 from hw_insight.avoid_vfh import (
     VfhParams,
@@ -36,6 +37,7 @@ from hw_insight.avoid_vfh import (
 )
 from hw_insight.avoid_planner import OccupancyGridPlanner, select_subgoal
 from hw_insight.mission_safety import is_landed_candidate, should_request_disarm
+from hw_insight.mission_control import decide_control
 
 try:
     import cv2
@@ -231,6 +233,12 @@ class AvoidNode(Node):
             self.on_octomap,
             octo_qos,
         )
+        self.hold_service = self.create_service(
+            Trigger, '/hw_insight/mission/hold', self.on_hold_request)
+        self.resume_service = self.create_service(
+            Trigger, '/hw_insight/mission/resume', self.on_resume_request)
+        self.land_service = self.create_service(
+            Trigger, '/hw_insight/mission/land', self.on_land_request)
 
         self.depth = None
         self.depth_t = 0.0
@@ -244,6 +252,8 @@ class AvoidNode(Node):
 
         self.setpoint_counter = 0
         self.state = 'WAIT'
+        self.resume_state = None
+        self.hold_started = 0.0
         self.last_yaw = 0.0
         self.scan_yaw = 0.0
         self.scan_step_t = 0.0
@@ -338,6 +348,79 @@ class AvoidNode(Node):
                     len(xyz), len(self.global_route)))
         except Exception as e:
             self.get_logger().warn('octomap planner update failed: %s' % e)
+
+    # ---------- operator controls ----------
+    def _apply_control(self, action, response):
+        now = time.time()
+        decision = decide_control(action, self.state, self.resume_state)
+        response.success = decision.accepted
+        response.message = decision.message
+        if not decision.accepted:
+            self.get_logger().warn(
+                'operator %s rejected in %s: %s' % (
+                    action, self.state, decision.message))
+            return response
+
+        previous_state = self.state
+        if action == 'hold':
+            self.resume_state = decision.resume_state
+            self.hold_started = now
+            self.state = decision.next_state
+            self.action = 'operator_hold'
+        elif action == 'resume':
+            held_for = max(0.0, now - self.hold_started)
+            if decision.next_state == 'NAVIGATE':
+                self.state_t += held_for
+                self.best_dist_t += held_for
+            elif decision.next_state == 'SCAN':
+                self.scan_step_t += held_for
+            self.state = decision.next_state
+            self.resume_state = decision.resume_state
+            self.hold_started = 0.0
+            self.action = 'operator_resume'
+        else:
+            self.resume_state = None
+            self.hold_started = 0.0
+            self.start_landing(now, 'operator requested safe landing')
+        self.get_logger().info(
+            'operator %s: %s -> %s' % (action, previous_state, self.state))
+        return response
+
+    def on_hold_request(self, _request, response):
+        return self._apply_control('hold', response)
+
+    def on_resume_request(self, _request, response):
+        return self._apply_control('resume', response)
+
+    def on_land_request(self, _request, response):
+        return self._apply_control('land', response)
+
+    def status_snapshot(self):
+        """Return a JSON-serializable snapshot for the desktop GUI."""
+        obstacle = min(self.dc, self.dl, self.dr)
+        return {
+            'state': self.state,
+            'armed': (
+                None if not self.have_st else
+                self.st.arming_state == VehicleStatus.ARMING_STATE_ARMED),
+            'nav_state': int(self.st.nav_state) if self.have_st else None,
+            'position': (
+                [float(self.pos.x), float(self.pos.y), float(self.pos.z)]
+                if self.have_pos else None),
+            'velocity': (
+                [float(self.pos.vx), float(self.pos.vy), float(self.pos.vz)]
+                if self.have_pos else None),
+            'goal': [float(self.goal_x), float(self.goal_y)],
+            'goal_index': int(self.goal_idx),
+            'goal_count': len(self.goal_list),
+            'goal_distance': (
+                math.hypot(self.goal_x - self.pos.x, self.goal_y - self.pos.y)
+                if self.have_pos else None),
+            'nearest_obstacle': obstacle if obstacle < 900.0 else None,
+            'action': self.action,
+            'elapsed': max(0.0, time.time() - self.t0),
+            'resumable': self.state == 'HOLD' and self.resume_state is not None,
+        }
 
     # ---------- depth metrics ----------
     def depth_metrics(self):
@@ -464,7 +547,7 @@ class AvoidNode(Node):
         depth_ok = (now - self.depth_t) < 1.5
         pos_ok = (now - self.pos_t) < 1.0
         sensor_control_state = self.state in (
-            'TAKEOFF', 'NAVIGATE', 'HOVER', 'SCAN')
+            'TAKEOFF', 'NAVIGATE', 'HOVER', 'SCAN', 'HOLD')
         if sensor_control_state and not (depth_ok and pos_ok):
             self.action = 'NO_SENSOR'
             self.publish_velocity(0.0, 0.0, 0.0, yaw)
@@ -536,6 +619,10 @@ class AvoidNode(Node):
             self.action = 'hover'
             if now > self.hover_until:
                 self.start_landing(now, 'arrived at goal, landing')
+
+        if self.state == 'HOLD':
+            self.action = 'operator_hold'
+            vx = vy = vz = 0.0
 
         if self.state == 'LAND':
             self.action = 'land'
@@ -627,7 +714,8 @@ class AvoidNode(Node):
 
         if self.tick % 5 == 0:
             self.log_line(now, yaw, yawspeed)
-        if self.tick % 10 == 0 and self.state in ('TAKEOFF', 'NAVIGATE', 'HOVER', 'LAND', 'SCAN'):
+        if self.tick % 10 == 0 and self.state in (
+                'TAKEOFF', 'NAVIGATE', 'HOVER', 'LAND', 'SCAN', 'HOLD'):
             self.get_logger().info(
                 ('[%s] pos=(%.1f,%.1f,%.1f) goal_dist=%.1f dc=%.1f '
                  'dl=%.1f dr=%.1f act=%s v=(%.2f,%.2f,%.2f) '

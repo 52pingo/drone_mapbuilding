@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from drone_gui.commands import CommandBuilder, windows_path_to_wsl
 from drone_gui.models import MissionPlan, RuntimeConfig
 
@@ -31,6 +33,21 @@ def test_stack_command_forwards_runtime_paths(tmp_path):
     assert command.program == "wsl.exe"
     assert f"ROS_WORKSPACE={config.ros_workspace}" in command.arguments
     assert command.arguments[-2] == "bash"
+
+
+def test_probe_and_control_commands_use_argument_arrays(tmp_path):
+    builder = CommandBuilder(make_config(tmp_path))
+    probe = builder.probe_stack()
+    control = builder.mission_control("land")
+    assert probe.program == "wsl.exe"
+    assert probe.arguments[-2] == "bash"
+    assert control.arguments[-1] == "land"
+    assert "gui_mission_control.sh" in control.arguments[-2]
+
+
+def test_unknown_control_is_rejected(tmp_path):
+    with pytest.raises(ValueError):
+        CommandBuilder(make_config(tmp_path)).mission_control("disarm")
 
 
 def test_mission_command_contains_validated_route(tmp_path):

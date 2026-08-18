@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFormLayout,
     QFrame,
@@ -15,9 +15,14 @@ from PySide6.QtWidgets import (
 )
 
 from drone_gui.widgets.status_badge import StatusBadge
+from drone_gui.widgets.mission_controls import MissionControls
 
 
 class LivePage(QWidget):
+    hold_requested = Signal()
+    resume_requested = Signal()
+    land_requested = Signal()
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.video = QLabel("等待 AirSim RGB / YOLO 数据流")
@@ -37,6 +42,10 @@ class LivePage(QWidget):
         self.objects.setHeaderLabels(["类别", "置信度", "深度"])
         self.objects.setAccessibleName("当前视觉检测目标")
         self.objects.setAlternatingRowColors(True)
+        self.controls = MissionControls()
+        self.controls.hold_requested.connect(self.hold_requested)
+        self.controls.resume_requested.connect(self.resume_requested)
+        self.controls.land_requested.connect(self.land_requested)
         self._build_layout()
 
     def _build_layout(self) -> None:
@@ -52,7 +61,7 @@ class LivePage(QWidget):
         header.addWidget(self.state)
         camera_layout.addLayout(header)
         camera_layout.addWidget(self.video, 1)
-        note = QLabel("M1 已建立展示接口；M3 将接入连续 RGB 帧、检测框和跟踪 ID。")
+        note = QLabel("M2 已接入飞行状态与安全控制；M3 将接入连续 RGB 帧、检测框和跟踪 ID。")
         note.setProperty("role", "muted")
         note.setWordWrap(True)
         camera_layout.addWidget(note)
@@ -73,6 +82,7 @@ class LivePage(QWidget):
         object_title.setProperty("role", "sectionTitle")
         telemetry_layout.addWidget(object_title)
         telemetry_layout.addWidget(self.objects, 1)
+        telemetry_layout.addWidget(self.controls)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -101,6 +111,30 @@ class LivePage(QWidget):
 
     def set_process_state(self, state: str, text: str) -> None:
         self.state.set_state(state, text)
+
+    def update_status(self, payload: dict) -> None:
+        phase = str(payload.get("state", "UNKNOWN")).upper()
+        self.telemetry["阶段"].setText(phase)
+        armed = payload.get("armed")
+        self.telemetry["飞行状态"].setText(
+            "已锁定" if armed is True else "已解除锁定" if armed is False else "未知"
+        )
+        position = payload.get("position")
+        if isinstance(position, list) and len(position) == 3:
+            self.telemetry["位置 N/E/Z"].setText(
+                " / ".join(f"{float(value):.1f}" for value in position)
+            )
+        obstacle = payload.get("nearest_obstacle")
+        self.telemetry["最近障碍"].setText(
+            f"{float(obstacle):.1f} m" if obstacle is not None else "无有效近障碍"
+        )
+        elapsed = float(payload.get("elapsed", 0.0))
+        self.telemetry["任务耗时"].setText(
+            f"{int(elapsed) // 60:02d}:{int(elapsed) % 60:02d}"
+        )
+        self.controls.set_state(phase)
+        if phase == "DONE":
+            self.state.set_state("done", "任务完成")
 
     def set_detections(self, detections: list[dict]) -> None:
         self.objects.clear()

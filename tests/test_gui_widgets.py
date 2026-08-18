@@ -10,6 +10,8 @@ from drone_gui.commands import CommandSpec
 from drone_gui.models import MissionPlan, RuntimeConfig, Waypoint
 from drone_gui.runtime import RuntimeController
 from drone_gui.widgets.mission_page import MissionPage
+from drone_gui.widgets.preflight_page import PreflightPage
+from drone_gui.widgets.live_page import LivePage
 from drone_gui.widgets.waypoint_canvas import WaypointCanvas
 
 
@@ -42,6 +44,20 @@ def test_main_window_navigation_and_accessible_surfaces(qtbot, tmp_path):
     assert window.shell.page_title.text() == "航线规划"
 
 
+def test_main_window_accepts_structured_done_only_when_disarmed(qtbot, tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    config = RuntimeConfig.defaults(repo_root)
+    config.results_dir = tmp_path / "results"
+    window = MainWindow(config)
+    qtbot.addWidget(window)
+
+    window._task_output("mission", 'GUI_STATUS {"state":"DONE","armed":true}')
+    assert not window._mission_closed_loop
+    window._task_output("mission", 'GUI_STATUS {"state":"DONE","armed":false}')
+    assert window._mission_closed_loop
+    assert window.shell.mission_status.text() == "已降落 / 已解锁"
+
+
 def test_runtime_controller_streams_process_output(qtbot, tmp_path):
     controller = RuntimeController()
     output = []
@@ -55,3 +71,45 @@ def test_runtime_controller_streams_process_output(qtbot, tmp_path):
         assert controller.start("probe", command)
     assert signal.args == ["probe", 0]
     assert any("qprocess-ready" in text for text in output)
+
+
+def test_runtime_controller_reassembles_split_lines(qtbot, tmp_path):
+    controller = RuntimeController()
+    output = []
+    controller.task_output.connect(lambda _name, text: output.append(text))
+    command = CommandSpec(
+        sys.executable,
+        ("-c", "import sys;sys.stdout.write('GUI_');sys.stdout.flush();"
+         "sys.stdout.write('STATUS {\\\"state\\\":\\\"HOLD\\\"}\\n')"),
+        tmp_path,
+    )
+    with qtbot.waitSignal(controller.task_finished, timeout=5000):
+        assert controller.start("split", command)
+    assert output == ['GUI_STATUS {"state":"HOLD"}']
+
+
+def test_live_status_enables_only_safe_controls(qtbot):
+    page = LivePage()
+    qtbot.addWidget(page)
+    page.update_status({
+        "state": "NAVIGATE", "armed": True,
+        "position": [1, 2, -15], "nearest_obstacle": 4.5, "elapsed": 65,
+    })
+    assert page.controls.hold_button.isEnabled()
+    assert not page.controls.resume_button.isEnabled()
+    assert page.controls.land_button.isEnabled()
+    assert page.telemetry["位置 N/E/Z"].text() == "1.0 / 2.0 / -15.0"
+
+    page.update_status({"state": "HOLD", "armed": True, "elapsed": 66})
+    assert not page.controls.hold_button.isEnabled()
+    assert page.controls.resume_button.isEnabled()
+
+
+def test_preflight_requires_successful_runtime_probe(qtbot, tmp_path):
+    config = RuntimeConfig.defaults(tmp_path)
+    page = PreflightPage(config)
+    qtbot.addWidget(page)
+    assert not page.required_ready
+    page.apply_runtime_probe({key: True for key, _name, _required in page.RUNTIME_COMPONENTS})
+    # Runtime is healthy, but deliberately missing local fixture files still block start.
+    assert not page.required_ready
