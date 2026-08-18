@@ -18,6 +18,10 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=None)
     parser.add_argument("--smoke-test", action="store_true")
     parser.add_argument("--screenshot", type=Path, default=None)
+    parser.add_argument(
+        "--session-dir", type=Path, default=None,
+        help="open an existing result directory and attach its live snapshots",
+    )
     parser.add_argument("--page", type=int, choices=range(4), default=0)
     return parser.parse_args(argv)
 
@@ -37,7 +41,17 @@ def main(argv=None) -> int:
     app.setFont(QFont("Microsoft YaHei UI", 10))
     app.setStyleSheet(APP_STYLESHEET)
     window = MainWindow(config)
-    window.shell.show_page(args.page)
+    window.shell.show_page(3 if args.session_dir else args.page)
+    if args.session_dir:
+        root = args.session_dir.resolve()
+        session = {
+            "result_root": str(root),
+            "semantic_dir": str(root / "detected_classes"),
+            "live_dir": str(root / "live_feed"),
+            "map_dir": str(root / "live_map"),
+        }
+        window.perception.start(session)
+        window.results_page.start_session(session)
     window.show()
     if args.screenshot:
         def capture_and_quit() -> None:

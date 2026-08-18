@@ -8,20 +8,16 @@ from drone_gui.commands import CommandBuilder
 from drone_gui.mission_actions import MissionActionController
 from drone_gui.models import MissionPlan, RuntimeConfig
 from drone_gui.perception_feed import PerceptionFeed
-from drone_gui.protocol import (
-    GUI_SESSION_PREFIX, GUI_STATUS_PREFIX,
-    parse_prefixed_json,
-)
+from drone_gui.protocol import GUI_SESSION_PREFIX, GUI_STATUS_PREFIX, parse_prefixed_json
 from drone_gui.runtime import RuntimeController
 from drone_gui.widgets.control_shell import ControlShell
 from drone_gui.widgets.live_page import LivePage
 from drone_gui.widgets.mission_page import MissionPage
 from drone_gui.widgets.preflight_page import PreflightPage
-from drone_gui.widgets.results_page import ResultsPage
+from drone_gui.widgets.map_results_page import MapResultsPage
 
 
 class MainWindow(QMainWindow):
-    PAGE_NAMES = ("系统与自检", "航线规划", "实时感知", "地图与成果")
     def __init__(self, config: RuntimeConfig) -> None:
         super().__init__()
         self.config = config
@@ -32,13 +28,12 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Drone Mapbuilding Control Station")
         self.setMinimumSize(1180, 760)
         self.resize(1480, 920)
-
         self.preflight_page = PreflightPage(config)
         self.mission_page = MissionPage()
         self.live_page = LivePage()
-        self.results_page = ResultsPage(config.results_dir)
+        self.results_page = MapResultsPage(config.results_dir)
         self.shell = ControlShell(
-            self.PAGE_NAMES,
+            ControlShell.PAGE_NAMES,
             (
                 self.preflight_page,
                 self.mission_page,
@@ -74,6 +69,7 @@ class MainWindow(QMainWindow):
         self.runtime.task_error.connect(self._task_error)
         self.perception.frame_ready.connect(self.live_page.set_frame)
         self.perception.snapshot_ready.connect(self.live_page.update_perception)
+        self.perception.snapshot_ready.connect(self.results_page.update_semantics)
         self.perception.state_changed.connect(self.live_page.set_feed_state)
 
     def _show_page(self, index: int) -> None:
@@ -126,9 +122,11 @@ class MainWindow(QMainWindow):
         session = parse_prefixed_json(text, GUI_SESSION_PREFIX)
         if session is not None:
             self.perception.start(session)
+            self.results_page.start_session(session)
         payload = parse_prefixed_json(text, GUI_STATUS_PREFIX)
         if payload is not None:
             self.live_page.update_status(payload)
+            self.results_page.update_telemetry(payload)
             if payload.get("state") == "DONE" and payload.get("armed") is False:
                 self._mission_closed_loop = True
                 self.shell.mission_status.set_state("done", "已降落 / 已解锁")
@@ -155,6 +153,7 @@ class MainWindow(QMainWindow):
     def _mission_finished(self, exit_code: int) -> None:
         self.mission_page.set_running(False)
         self.perception.stop("任务结束，保留最后一帧")
+        self.results_page.stop_live_map("任务结束，保留最终地图")
         if exit_code != 0:
             self.shell.mission_status.set_state("error", "任务异常结束")
             self.live_page.set_process_state("error", "感知任务异常")
@@ -176,6 +175,7 @@ class MainWindow(QMainWindow):
         if name == "mission":
             self.mission_page.set_running(False)
             self.perception.stop("任务异常，视觉流已停止")
+            self.results_page.stop_live_map("任务异常，地图流已停止")
         if name == "probe":
             self.health.fail(message)
             return

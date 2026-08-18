@@ -15,10 +15,15 @@ def test_snapshot_serializes_detections_and_first_evidence():
         "confidence": 0.91, "depth_m": 7.25,
         "image": "tree/scene_001.jpg",
     }]
-    snapshot = build_snapshot(8, (360, 640, 3), 4.75, [detection], events)
+    objects = [{"id": "tree-001", "label": "tree", "position_ned": [1, 2, -3]}]
+    snapshot = build_snapshot(
+        8, (360, 640, 3), 4.75, [detection], events,
+        semantic_objects=objects,
+    )
     assert snapshot["size"] == [640, 360]
     assert snapshot["detections"][0]["bbox_xyxy"] == [10, 20, 80, 140]
     assert snapshot["catalog"][0]["first_image"] == "tree/scene_001.jpg"
+    assert snapshot["semantic_objects"] == objects
 
 
 def test_evidence_catalog_preserves_first_image_and_latest_count():

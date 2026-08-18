@@ -69,7 +69,7 @@ scripts/
   build_uav_semantic_dataset.py           合并/映射训练集
   collect_citypark_semantic_dataset.py    AirSim 分割标签采集
   train_uav_semantic.py                   Ultralytics 训练入口
-drone_gui/                                PySide6 桌面工作站（M3 实时感知）
+drone_gui/                                PySide6 桌面工作站（M4 三维语义地图）
 tests/                                    VFH 与语义证据测试
 ```
 
@@ -248,13 +248,23 @@ mission_console.log
 flight_trajectory_citypark_loop.png
 octomap_map_citypark_loop.png
 depth_rviz_citypark.png
+live_map/
+  latest.json
+  points_*.npy
+live_feed/
+  latest.json
+  frame_*.jpg
 detected_classes/
   summary.json
   events.jsonl
+  semantic_objects.json
   perception.log
   tree/scene_*.jpg
   building/scene_*.jpg
   ...
+semantic_map.ply              # GUI 结束任务或手动导出后生成
+semantic_objects.json         # GUI 导出的三维语义对象
+semantic_map_view.png         # 手动导出当前三维视角时生成
 ```
 
 类别目录保存完整场景的带框图片：当前重点类别为绿色框，画面中的其他类别使用
@@ -368,9 +378,9 @@ reset 服务在当前组合中并不可靠，重启能同时清理 EKF 原点和
 `max_images_per_class`。类别必须连续出现指定帧数，且同类保存受时间间隔和数量上限
 控制。错误详情在 `detected_classes/perception_error.log`。
 
-## Qt GUI（M3 实时感知已接入）
+## Qt GUI（M4 实时三维语义地图已接入）
 
-当前已实现可运行的 M1–M3 桌面工作站：
+当前已实现可运行的 M1–M4 桌面工作站：
 
 - 深色工业控制风格主窗口、键盘可达的四页导航和统一状态栏；
 - UE4、工程、视觉 Python、AirSim Client、权重、WSL 和成果目录本地自检；
@@ -383,6 +393,14 @@ reset 服务在当前组合中并不可靠，重启能同时清理 EKF 原点和
   深度、滚动 FPS 和当前分辨率，不会用大体积图像阻塞控制台或 Qt 主线程；
 - 实时页显示完整带框画面、本帧目标、累计确认类别、证据数量和每类首次发现截图；
 - 视觉流超过 3 秒未更新时明确显示断流告警，任务结束后保留最后一帧供复核；
+- WSL 地图桥接订阅 `/octomap_point_cloud_centers`，把 `world_enu` 正确转换为 PX4
+  本地 NED，按 1 Hz 限流、最多 80,000 点降采样并原子发布 NPY + JSON 快照；
+- 三维页实时显示占用点云、无人机轨迹和当前位置，支持鼠标旋转/缩放、适配地图、
+  俯视、图层开关和点大小控制；
+- YOLO 框中心结合 `DepthPerspective`、相机 FOV、同步相机位置和姿态反投影到 NED，
+  同类近邻观测合并为稳定对象 ID，并以彩色三维标签叠加到地图；
+- 一键导出 `semantic_map.ply`、`semantic_objects.json` 和当前三维视图 PNG；任务结束时
+  自动落盘 PLY/JSON，也可用 `--session-dir` 在没有 UE4/ROS 的情况下打开已有快照；
 - Hold、Resume 和二次确认的安全 Land；Hold 仅在导航/扫描阶段可用，Land 复用原有
   接地稳定判定与普通 disarm 闭环，不提供空中强制解除锁定；
 - 实时感知页面的数据接口，以及已有类别图片、深度图、轨迹图、OctoMap 浏览；
@@ -403,6 +421,10 @@ Copy-Item .\config\gui_config.example.json .\config\gui_config.json
 
 ```powershell
 .\.venv-gui\Scripts\python.exe -m drone_gui
+
+# 离线打开某次任务的三维地图和最后一帧感知结果
+.\.venv-gui\Scripts\python.exe -m drone_gui `
+  --session-dir .\results\citypark_semantic_YYYYMMDD_HHMMSS
 ```
 
 GUI 测试和无界面启动检查：
@@ -423,14 +445,18 @@ $guiTests = Get-ChildItem .\tests\test_gui_*.py | Select-Object -Expand FullName
 /hw_insight/mission/land
 ```
 
-每个任务的实时交换文件位于 `live_feed/`。带框 JPEG 使用轮转文件名并只保留最近
+每个任务的视觉交换文件位于 `live_feed/`。带框 JPEG 使用轮转文件名并只保留最近
 三帧，`latest.json` 最后原子提交，因此 GUI 不会读到半写入图片；正式的类别证据仍
 完整保存在 `detected_classes/<class>/` 下。可通过 `gui_config.json` 中的
 `perception_interval` 调整采样间隔，默认 `0.20 s`。
 
-M3 已使用本地 `best.pt` 完成真实图片推理、带框帧、类别 JSON 和首次证据界面验证。
-三维页面尚未实现实时点云渲染，属于 M4；M2/M3 仍需在 UE4/PX4 全链路运行时完成
-一次 GUI 大环线飞行与持续 RGB 流现场验收。
+地图交换文件位于 `live_map/`：桥接器保留最近三个 `points_*.npy`，并最后更新
+`latest.json`，GUI 每 500 ms 非阻塞检查一次；超过 4 秒没有新快照会显示明确告警。
+坐标元数据始终声明 `px4_local_ned`，渲染和 PLY 导出时仅把 Down 取反为向上高度。
+
+M4 已完成 Windows OpenGL 三维渲染、24,300 点压力样例、三维语义标签、离线 Session、
+PLY/JSON 导出和 WSL ROS2 导入验证。仍需在 UE4/PX4 全链路运行时完成一次从 GUI
+启动的大环线飞行，现场核对持续 RGB、真实 OctoMap 快照、轨迹和最终自动导出。
 
 ### 后续规划
 

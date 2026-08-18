@@ -18,8 +18,12 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 try:
     from scripts.perception_live import FrameRateMeter, LiveFrameWriter
+    from scripts.semantic_geometry import (
+        SemanticObjectTracker, project_box_center_ned,
+    )
 except ImportError:
     from perception_live import FrameRateMeter, LiveFrameWriter
+    from semantic_geometry import SemanticObjectTracker, project_box_center_ned
 
 
 @dataclasses.dataclass(frozen=True)
@@ -29,6 +33,7 @@ class Detection:
     confidence: float
     box: Tuple[int, int, int, int]
     depth_m: Optional[float] = None
+    world_ned: Optional[Tuple[float, float, float]] = None
 
 
 class FirstSeenTracker:
@@ -387,11 +392,17 @@ def main() -> int:
         airsim = import_airsim(args.airsim_client, args.airsim_rpc_vendor)
         client = airsim.MultirotorClient()
         client.confirmConnection()
+        camera_fov = float(
+            client.simGetCameraInfo(args.camera, vehicle_name=args.vehicle).fov
+        )
+    else:
+        camera_fov = 0.0
 
     events: List[dict] = []
     started = time.monotonic()
     frame_index = 0
     fps_meter = FrameRateMeter()
+    semantic_tracker = SemanticObjectTracker()
     print(f"semantic perception ready: {weights.name}")
     print(f"classes: {', '.join(str(v) for v in model.names.values())}")
     print(f"evidence -> {output_dir}")
@@ -434,8 +445,25 @@ def main() -> int:
             verbose=False,
         )[0]
         detections = collect_detections(result, depth, frame.shape, args, np)
+        if not args.source_image:
+            response = responses[0]
+            position = response.camera_position
+            orientation = response.camera_orientation
+            camera_position = (position.x_val, position.y_val, position.z_val)
+            camera_quaternion = (
+                orientation.w_val, orientation.x_val,
+                orientation.y_val, orientation.z_val,
+            )
+            detections = [dataclasses.replace(
+                detection,
+                world_ned=project_box_center_ned(
+                    detection.box, detection.depth_m, frame.shape, camera_fov,
+                    camera_position, camera_quaternion,
+                ),
+            ) for detection in detections]
         frame_index += 1
         live_fps = fps_meter.tick(time.monotonic())
+        semantic_tracker.update(detections, time.time())
         new_events = tracker.update(detections, time.monotonic())
 
         for detection in new_events:
@@ -469,6 +497,10 @@ def main() -> int:
                     if detection.depth_m is not None else None
                 ),
                 "bbox_xyxy": list(detection.box),
+                "position_ned": (
+                    list(detection.world_ned)
+                    if detection.world_ned is not None else None
+                ),
                 "image": image_path.relative_to(output_dir).as_posix(),
             }
             events.append(event)
@@ -486,7 +518,8 @@ def main() -> int:
 
         if live_writer is not None:
             live_writer.publish(
-                frame, detections, events, frame_index, live_fps
+                frame, detections, events, frame_index, live_fps,
+                semantic_tracker.snapshot(),
             )
 
         if args.source_image:
@@ -500,6 +533,13 @@ def main() -> int:
     metadata["frames_processed"] = frame_index
     metadata["class_image_counts"] = dict(sorted(tracker.counts.items()))
     write_summary(output_dir / "summary.json", metadata, events)
+    (output_dir / "semantic_objects.json").write_text(
+        json.dumps({
+            "coordinate_frame": "px4_local_ned",
+            "objects": semantic_tracker.snapshot(),
+        }, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     print(f"semantic perception stopped: frames={frame_index} events={len(events)}")
     return 0
 

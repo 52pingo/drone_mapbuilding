@@ -19,6 +19,8 @@ from drone_gui.widgets.status_badge import StatusBadge
 
 
 class ControlShell(QWidget):
+    PAGE_NAMES = ("系统与自检", "航线规划", "实时感知", "地图与成果")
+
     page_requested = Signal(int)
 
     def __init__(self, page_names: Sequence[str], pages: Sequence[QWidget], parent=None) -> None:
@@ -71,7 +73,7 @@ class ControlShell(QWidget):
             layout.addWidget(button)
         self.nav_buttons[0].setChecked(True)
         layout.addStretch()
-        version = QLabel("GUI M3 · v0.3.0\n坐标系：PX4 Local NED")
+        version = QLabel("GUI M4 · v0.4.0\n坐标系：PX4 Local NED")
         version.setProperty("role", "muted")
         layout.addWidget(version)
         return sidebar

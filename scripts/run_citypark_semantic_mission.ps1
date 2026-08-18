@@ -35,9 +35,11 @@ if ([string]::IsNullOrWhiteSpace($ResultRoot)) {
 $ResultRoot = [System.IO.Path]::GetFullPath($ResultRoot)
 $SemanticDir = Join-Path $ResultRoot 'detected_classes'
 $LiveDir = Join-Path $ResultRoot 'live_feed'
+$MapDir = Join-Path $ResultRoot 'live_map'
 $StopFile = Join-Path $ResultRoot 'semantic_stop.signal'
 New-Item -ItemType Directory -Force -Path $SemanticDir | Out-Null
 New-Item -ItemType Directory -Force -Path $LiveDir | Out-Null
+New-Item -ItemType Directory -Force -Path $MapDir | Out-Null
 if (Test-Path -LiteralPath $StopFile) {
     Remove-Item -LiteralPath $StopFile -Force
 }
@@ -62,6 +64,7 @@ $sessionPayload = [ordered]@{
     result_root = $ResultRoot
     semantic_dir = $SemanticDir
     live_dir = $LiveDir
+    map_dir = $MapDir
 } | ConvertTo-Json -Compress
 Write-Output "GUI_SESSION $sessionPayload"
 Write-Host "Starting semantic perception -> $SemanticDir"

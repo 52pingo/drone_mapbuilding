@@ -84,6 +84,8 @@ class PerceptionFeed(QObject):
 
         detections = snapshot.get("detections")
         snapshot["detections"] = detections if isinstance(detections, list) else []
+        objects = snapshot.get("semantic_objects")
+        snapshot["semantic_objects"] = objects if isinstance(objects, list) else []
         size = snapshot.get("size")
         snapshot["size"] = size if isinstance(size, list) and len(size) == 2 else [0, 0]
         try:

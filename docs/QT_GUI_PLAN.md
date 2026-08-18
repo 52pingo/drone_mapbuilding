@@ -1,9 +1,10 @@
 # Qt 无人机避障建图工作站：功能与实施方案
 
-> 实施状态（2026-08-18）：M1–M3 已实现，完成 PySide6 主窗口、本地/WSL 动态
+> 实施状态（2026-08-18）：M1–M4 已实现，完成 PySide6 主窗口、本地/WSL 动态
 > 自检、NED 航点编辑、结构化飞行遥测、Hold/Resume/Safe Land，以及 AirSim RGB、
 > YOLO 框、类别证据和首次发现截图的实时共享文件协议。已用 `best.pt` 做真实图片
-> 端到端验证；持续 AirSim 实时流和 GUI 大环线仍是现场验收项，三维点云按 M4 推进。
+> 端到端验证；M4 已加入 OctoMap 原子快照、三维点云/轨迹、语义反投影与稳定标签、
+> PLY/JSON/PNG 导出和离线 Session。GUI 大环线与真实连续点云仍是现场验收项。
 
 ## 1. 产品目标
 
@@ -23,7 +24,7 @@ PySide6 GUI（Windows）
   ├─ RGB + YOLO 框视图 / 类别图库
   ├─ 2D 轨迹与 3D 语义点云视图
   └─ Session 数据与导出管理
-              │ WebSocket + JSON/二进制帧
+              │ 原子 JSON + JPEG/NPY（后期可升级 WebSocket）
 WSL Backend（ROS2 节点或独立服务）
   ├─ Mission Manager：PX4 状态机、航点、Land/Disarm 闭环
   ├─ Map Bridge：PointCloud2 / OctoMap 降采样与分块
@@ -71,20 +72,25 @@ PX4 SITL ⇄ AirSim/UE4 ⇄ 深度/RGB ⇄ VFH/OctoMap/YOLO
 
 ### 4.2 实时地图桥接
 
-订阅 `/octomap_point_cloud_centers` 或 `/depth/points_relay`，在后端做体素降采样、
-范围裁剪和增量分块，再以压缩二进制发送给 GUI。GUI 首版可用
-`pyqtgraph.opengl.GLViewWidget`；点数和交互需求提高后切换为 PyVista/VTK。
+M4 已订阅 `/octomap_point_cloud_centers`，使用可靠、Transient Local QoS 接收 OctoMap
+占用点中心；后端把 `world_enu` 转为 `px4_local_ned`，过滤非有限值，确定性限制到
+80,000 点，并以 NPY 先写、JSON 后提交的方式每秒发布快照。GUI 每 500 ms 非阻塞轮询，
+保留断流和无数据状态。首版使用 `pyqtgraph.opengl.GLViewWidget`；点数和交互需求提高后
+再增加体素/范围裁剪或切换 PyVista/VTK。
 
 ### 4.3 三维语义融合
 
-现有代码只在二维画面中为框估计一个深度。要导出“包含物品标注的 3D 深度图”，
-需要新增以下数据链：
+M4 首版已经打通以下数据链：
 
-1. 用相机内参把框内有效深度像素反投影为相机坐标点。
-2. 通过相机外参和无人机位姿转换到 `world_enu`。
-3. 按类别、空间距离和时间做聚类/跟踪，合并重复观察。
-4. 为每个语义对象保存 `class/confidence/centroid/3D bbox/track_id`。
-5. 渲染时用类别颜色、文字标签和包围盒叠加到占用点云。
+1. 取检测框中心的有效 `DepthPerspective`，结合相机水平 FOV 构造投影射线。
+2. 使用 AirSim 同帧返回的相机位置和四元数转换到 PX4 本地 NED。
+3. 按类别与 4 m 空间距离合并重复观察，生成稳定对象 ID 和观测次数。
+4. 为每个语义对象保存 `label/max_confidence/position_ned/id/observations`，并明确标记
+   当前中心点估计为近似值。
+5. 渲染时用类别颜色、三维锚点和随相机移动的 Qt 标签叠加到占用点云。
+
+后续精度升级项是框内多像素鲁棒质心、三维包围盒和更严格的数据关联；它们不阻塞
+当前 M4 演示和结果导出。
 
 安全避障仍使用深度/VFH；YOLO 语义只用于解释、筛选和成果标注，不能替代几何
 避障。这样即使视觉漏检，飞行安全链路仍然工作。
@@ -128,7 +134,7 @@ sessions/<timestamp>_<mission>/
 | 2D 规划/轨迹 | QGraphicsView + pyqtgraph | 本地 NED 坐标比在线地图更适合当前仿真 |
 | 3D 点云 | pyqtgraph.opengl；后期 PyVistaQt/VTK | 先快速实现，再按点量升级 |
 | 视频与框 | QGraphicsView/QImage | GUI 端可选择类别并查看框元数据 |
-| GUI↔WSL | WebSocket + JSON + 二进制消息 | 易调试、跨 Windows/WSL、支持回放 |
+| GUI↔WSL | 原子 JSON + JPEG/NPY；后期 WebSocket | 当前链路易调试、跨 Windows/WSL、可离线重开 |
 | 配置 | Pydantic + YAML/JSON | 路径、场景、任务和安全参数可校验 |
 | 打包 | PyInstaller | 首版生成 Windows 可执行目录 |
 | 测试 | pytest + pytest-qt | 覆盖状态机、协议、导出和界面响应 |
@@ -161,11 +167,16 @@ sessions/<timestamp>_<mission>/
 
 ### M4：实时 3D 语义地图（7–10 天）
 
+状态：功能实现与自动化验证完成；已在 Windows OpenGL 下验证 24,300 点、5 个三维
+语义标签和 PLY/JSON 导出，等待完整 UE4/PX4 大环线现场验收。
+
 - 点云增量显示、无人机位姿、语义反投影/聚类、3D 标签。
 - 验收：关闭/开启类别可筛选点云标签；同一静态物体不会随每帧无限复制。
 
 ### M5：导出、回放与交付（4–6 天）
 
+- 状态：M4 已提前完成 PLY/JSON/PNG 和当前快照离线打开；PCD/BT/HTML、完整遥测回放、
+  异常恢复和 PyInstaller 打包仍待实现。
 - PCD/PLY/BT/JSON/PNG/HTML 导出、Session 回放、异常恢复、打包。
 - 验收：导出的 Session 可在无 UE4/ROS 环境中重新打开并查看。
 

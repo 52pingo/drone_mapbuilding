@@ -37,6 +37,10 @@ def detection_payload(detection) -> dict:
             if detection.depth_m is not None else None
         ),
         "bbox_xyxy": [int(value) for value in detection.box],
+        "position_ned": (
+            [round(float(value), 3) for value in detection.world_ned]
+            if getattr(detection, "world_ned", None) is not None else None
+        ),
     }
 
 
@@ -71,6 +75,7 @@ def build_snapshot(
     detections: Sequence,
     events: Sequence[dict],
     image_name: str = "frame.jpg",
+    semantic_objects: Sequence[dict] = (),
 ) -> dict:
     """Build one JSON-serializable live perception snapshot."""
     height, width = frame_shape[:2]
@@ -82,6 +87,7 @@ def build_snapshot(
         "size": [int(width), int(height)],
         "detections": [detection_payload(item) for item in detections],
         "catalog": evidence_catalog(events),
+        "semantic_objects": list(semantic_objects),
         "image": image_name,
     }
 
@@ -132,7 +138,8 @@ class LiveFrameWriter:
         temporary.write_bytes(payload)
         os.replace(temporary, path)
 
-    def publish(self, frame, detections, events, frame_index: int, fps: float) -> None:
+    def publish(self, frame, detections, events, frame_index: int, fps: float,
+                semantic_objects=()) -> None:
         canvas = annotate_live(frame, detections, self.cv2, fps, frame_index)
         encoded, buffer = self.cv2.imencode(
             ".jpg", canvas, [self.cv2.IMWRITE_JPEG_QUALITY, 84]
@@ -142,7 +149,8 @@ class LiveFrameWriter:
         image_name = f"frame_{frame_index:06d}.jpg"
         self._replace_bytes(self.directory / image_name, buffer.tobytes())
         snapshot = build_snapshot(
-            frame_index, frame.shape, fps, detections, events, image_name
+            frame_index, frame.shape, fps, detections, events, image_name,
+            semantic_objects,
         )
         self._replace_bytes(
             self.directory / "latest.json",

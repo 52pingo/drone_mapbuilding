@@ -66,15 +66,20 @@ def test_main_window_starts_perception_feed_from_session_protocol(qtbot, tmp_pat
     qtbot.addWidget(window)
     live_dir = tmp_path / "live"
     semantic_dir = tmp_path / "semantic"
+    map_dir = tmp_path / "map"
     message = (
-        'GUI_SESSION {"live_dir":"%s","semantic_dir":"%s"}'
+        'GUI_SESSION {"live_dir":"%s","semantic_dir":"%s","map_dir":"%s"}'
         % (str(live_dir).replace("\\", "\\\\"),
-           str(semantic_dir).replace("\\", "\\\\"))
+           str(semantic_dir).replace("\\", "\\\\"),
+           str(map_dir).replace("\\", "\\\\"))
     )
     window._task_output("mission", message)
     assert window.perception.timer.isActive()
     assert window.perception.live_dir == live_dir
+    assert window.results_page.map_view.feed.timer.isActive()
+    assert window.results_page.map_view.feed.directory == map_dir
     window.perception.stop()
+    window.results_page.map_view.feed.stop()
 
 
 def test_runtime_controller_streams_process_output(qtbot, tmp_path):
