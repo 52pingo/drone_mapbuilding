@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# ROS2 / colcon
+build/
+install/
+log/
+
+# Models and datasets (keep outside Git; weights exceed GitHub's file limit)
+*.pt
+*.pth
+*.onnx
+*.engine
+datasets/
+
+# Runtime output
+results/
+logs/
+*.log
+*.pid
+*.signal
+*.bt
+*.ot
+*.pcd
+*.ply
+*.bag
+*.db3
+*.mp4
+
+# Local engines, SDKs and vendored third-party trees
+.tools/
+AirSim/
+QGroundControl/
+WSL/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

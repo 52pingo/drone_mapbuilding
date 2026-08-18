@@ -1,0 +1,85 @@
+{
+  "SettingsVersion": 1.2,
+  "SimMode": "Multirotor",
+  "ClockType": "SteppableClock",
+  "Vehicles": {
+    "PX4": {
+      "VehicleType": "PX4Multirotor",
+      "UseSerial": false,
+      "LockStep": true,
+      "UseTcp": true,
+      "TcpPort": 4560,
+      "ControlIp": "remote",
+      "ControlPortLocal": 14030,
+      "ControlPortRemote": 14280,
+      "LocalHostIp": "127.0.0.1",
+      "X": -134.09,
+      "Y": 258.15,
+      "Z": -1.5,
+      "Yaw": 0,
+      "Cameras": {
+        "CameraDepth": {
+          "CaptureSettings": [
+            {
+              "ImageType": 0,
+              "Width": 640,
+              "Height": 480,
+              "FOV_Degrees": 90,
+              "AutoExposureSpeed": 1000,
+              "MotionBlurAmount": 0,
+              "TargetGamma": 1.0
+            },
+            {
+              "ImageType": 2,
+              "Width": 400,
+              "Height": 300,
+              "FOV_Degrees": 90,
+              "AutoExposureSpeed": 1000,
+              "MotionBlurAmount": 0,
+              "TargetGamma": 1.0
+            }
+          ],
+          "NoiseSettings": [
+            {
+              "Enabled": false,
+              "ImageType": 0
+            }
+          ],
+          "Gimbal": {
+            "Stabilization": 0,
+            "Pitch": 0,
+            "Roll": 0,
+            "Yaw": 0
+          },
+          "X": 0,
+          "Y": 0,
+          "Z": -1,
+          "Pitch": 0,
+          "Roll": 0,
+          "Yaw": 0
+        }
+      },
+      "Sensors": {
+        "DistanceDown": {
+          "SensorType": 5,
+          "Enabled": true,
+          "MinDistance": 0.1,
+          "MaxDistance": 40,
+          "X": 0,
+          "Y": 0,
+          "Z": -0.5,
+          "Yaw": 0,
+          "Pitch": -90,
+          "Roll": 0,
+          "DrawDebugPoints": true,
+          "ExternalController": true
+        }
+      },
+      "Parameters": {
+        "NAV_RCL_ACT": 0,
+        "NAV_DLL_ACT": 0,
+        "COM_OBS_AVOID": 0
+      }
+    }
+  }
+}

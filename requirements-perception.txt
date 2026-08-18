@@ -1,0 +1,5 @@
+# Install a CUDA-compatible PyTorch build first: https://pytorch.org/get-started/locally/
+ultralytics==8.4.37
+numpy==1.24.4
+opencv-python>=4.8,<5
+pytest>=7,<9
