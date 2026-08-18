@@ -8,6 +8,7 @@ from typing import Any
 
 GUI_PROBE_PREFIX = "GUI_PROBE "
 GUI_STATUS_PREFIX = "GUI_STATUS "
+GUI_SESSION_PREFIX = "GUI_SESSION "
 
 
 def parse_prefixed_json(text: str, prefix: str) -> dict[str, Any] | None:

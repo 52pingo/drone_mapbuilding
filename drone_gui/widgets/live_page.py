@@ -3,19 +3,11 @@ from __future__ import annotations
 import re
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (
-    QFormLayout,
-    QFrame,
-    QHBoxLayout,
-    QLabel,
-    QTreeWidget,
-    QTreeWidgetItem,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
+from drone_gui.widgets.perception_sidebar import PerceptionSidebar
 from drone_gui.widgets.status_badge import StatusBadge
-from drone_gui.widgets.mission_controls import MissionControls
 
 
 class LivePage(QWidget):
@@ -25,27 +17,23 @@ class LivePage(QWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.video = QLabel("等待 AirSim RGB / YOLO 数据流")
+        self.video = QLabel("等待任务启动与 AirSim RGB 数据流")
         self.video.setAlignment(Qt.AlignCenter)
         self.video.setMinimumSize(640, 360)
         self.video.setProperty("role", "muted")
-        self.video.setAccessibleName("实时相机与识别框画面")
+        self.video.setAccessibleName("AirSim 实时相机与 YOLO 检测框")
         self.state = StatusBadge("尚未连接")
-        self.telemetry = {
-            "阶段": QLabel("WAIT"),
-            "飞行状态": QLabel("未知"),
-            "位置 N/E/Z": QLabel("—"),
-            "最近障碍": QLabel("—"),
-            "任务耗时": QLabel("—"),
-        }
-        self.objects = QTreeWidget()
-        self.objects.setHeaderLabels(["类别", "置信度", "深度"])
-        self.objects.setAccessibleName("当前视觉检测目标")
-        self.objects.setAlternatingRowColors(True)
-        self.controls = MissionControls()
+        self.feed_note = QLabel("M3 实时协议已就绪；启动任务后显示带框画面。")
+        self.feed_note.setProperty("role", "muted")
+        self.feed_note.setWordWrap(True)
+        self.sidebar = PerceptionSidebar()
+        self.telemetry = self.sidebar.telemetry
+        self.objects = self.sidebar.objects
+        self.controls = self.sidebar.controls
         self.controls.hold_requested.connect(self.hold_requested)
         self.controls.resume_requested.connect(self.resume_requested)
         self.controls.land_requested.connect(self.land_requested)
+        self._frame: QImage | None = None
         self._build_layout()
 
     def _build_layout(self) -> None:
@@ -54,50 +42,26 @@ class LivePage(QWidget):
         camera_layout = QVBoxLayout(camera_panel)
         camera_layout.setContentsMargins(14, 14, 14, 14)
         header = QHBoxLayout()
-        title = QLabel("实时感知")
+        title = QLabel("AirSim RGB · YOLO 语义感知")
         title.setProperty("role", "sectionTitle")
         header.addWidget(title)
         header.addStretch()
         header.addWidget(self.state)
         camera_layout.addLayout(header)
         camera_layout.addWidget(self.video, 1)
-        note = QLabel("M2 已接入飞行状态与安全控制；M3 将接入连续 RGB 帧、检测框和跟踪 ID。")
-        note.setProperty("role", "muted")
-        note.setWordWrap(True)
-        camera_layout.addWidget(note)
-
-        telemetry_panel = QFrame()
-        telemetry_panel.setProperty("role", "panel")
-        telemetry_layout = QVBoxLayout(telemetry_panel)
-        telemetry_layout.setContentsMargins(14, 14, 14, 14)
-        telemetry_title = QLabel("任务遥测")
-        telemetry_title.setProperty("role", "sectionTitle")
-        telemetry_layout.addWidget(telemetry_title)
-        form = QFormLayout()
-        for name, value in self.telemetry.items():
-            value.setProperty("role", "metric" if name == "阶段" else "")
-            form.addRow(name, value)
-        telemetry_layout.addLayout(form)
-        object_title = QLabel("本帧目标")
-        object_title.setProperty("role", "sectionTitle")
-        telemetry_layout.addWidget(object_title)
-        telemetry_layout.addWidget(self.objects, 1)
-        telemetry_layout.addWidget(self.controls)
+        camera_layout.addWidget(self.feed_note)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(12)
         layout.addWidget(camera_panel, 3)
-        layout.addWidget(telemetry_panel, 2)
+        layout.addWidget(self.sidebar, 2)
 
     def consume_log(self, text: str) -> None:
         upper = text.upper()
-        if "TAKEOFF" in upper:
-            self.telemetry["阶段"].setText("TAKEOFF")
-        if "NAVIGATE" in upper:
-            self.telemetry["阶段"].setText("NAVIGATE")
-        if "LAND" in upper:
-            self.telemetry["阶段"].setText("LAND")
+        for phase in ("TAKEOFF", "NAVIGATE", "HOLD", "LAND"):
+            if phase in upper:
+                self.telemetry["阶段"].setText(phase)
         if "DISARMED" in upper:
             self.telemetry["飞行状态"].setText("已解除锁定")
         if "MISSION DONE" in upper:
@@ -109,38 +73,52 @@ class LivePage(QWidget):
                 f"{position.group(1)} / {position.group(2)} / —"
             )
 
+    def update_status(self, payload: dict) -> None:
+        self.sidebar.set_status(payload)
+        if str(payload.get("state", "")).upper() == "DONE":
+            self.state.set_state("done", "任务完成")
+
+    def update_perception(self, payload: dict) -> None:
+        self.sidebar.set_detections(payload.get("detections", []))
+        self.sidebar.set_catalog(payload.get("catalog", []))
+        size = payload.get("size", [0, 0])
+        self.feed_note.setText(
+            f"帧 {int(payload.get('frame_index', 0)):,} · "
+            f"{float(payload.get('fps', 0)):.1f} FPS · "
+            f"{int(size[0]) if len(size) > 1 else 0}×{int(size[1]) if len(size) > 1 else 0}"
+        )
+
+    def set_frame(self, image: QImage) -> None:
+        self._frame = image
+        self._render_frame()
+
+    def set_feed_state(self, state: str, text: str) -> None:
+        self.state.set_state(state, text)
+        if state in {"warning", "error"}:
+            self.feed_note.setText(text)
+
+    def reset_perception(self) -> None:
+        self._frame = None
+        self.video.setPixmap(QPixmap())
+        self.video.setText("等待 YOLO 首帧")
+        self.sidebar.reset_perception()
+        self.feed_note.setText("正在初始化模型与 AirSim 图像连接…")
+
     def set_process_state(self, state: str, text: str) -> None:
         self.state.set_state(state, text)
 
-    def update_status(self, payload: dict) -> None:
-        phase = str(payload.get("state", "UNKNOWN")).upper()
-        self.telemetry["阶段"].setText(phase)
-        armed = payload.get("armed")
-        self.telemetry["飞行状态"].setText(
-            "已锁定" if armed is True else "已解除锁定" if armed is False else "未知"
-        )
-        position = payload.get("position")
-        if isinstance(position, list) and len(position) == 3:
-            self.telemetry["位置 N/E/Z"].setText(
-                " / ".join(f"{float(value):.1f}" for value in position)
-            )
-        obstacle = payload.get("nearest_obstacle")
-        self.telemetry["最近障碍"].setText(
-            f"{float(obstacle):.1f} m" if obstacle is not None else "无有效近障碍"
-        )
-        elapsed = float(payload.get("elapsed", 0.0))
-        self.telemetry["任务耗时"].setText(
-            f"{int(elapsed) // 60:02d}:{int(elapsed) % 60:02d}"
-        )
-        self.controls.set_state(phase)
-        if phase == "DONE":
-            self.state.set_state("done", "任务完成")
-
     def set_detections(self, detections: list[dict]) -> None:
-        self.objects.clear()
-        for detection in detections:
-            QTreeWidgetItem(self.objects, [
-                str(detection.get("label", "unknown")),
-                f"{float(detection.get('confidence', 0)):.2f}",
-                f"{float(detection['depth_m']):.1f} m" if detection.get("depth_m") else "—",
-            ])
+        self.sidebar.set_detections(detections)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._render_frame()
+
+    def _render_frame(self) -> None:
+        if self._frame is None or self._frame.isNull():
+            return
+        pixmap = QPixmap.fromImage(self._frame)
+        self.video.setText("")
+        self.video.setPixmap(pixmap.scaled(
+            self.video.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+        ))

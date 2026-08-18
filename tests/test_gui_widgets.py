@@ -58,6 +58,25 @@ def test_main_window_accepts_structured_done_only_when_disarmed(qtbot, tmp_path)
     assert window.shell.mission_status.text() == "已降落 / 已解锁"
 
 
+def test_main_window_starts_perception_feed_from_session_protocol(qtbot, tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    config = RuntimeConfig.defaults(repo_root)
+    config.results_dir = tmp_path / "results"
+    window = MainWindow(config)
+    qtbot.addWidget(window)
+    live_dir = tmp_path / "live"
+    semantic_dir = tmp_path / "semantic"
+    message = (
+        'GUI_SESSION {"live_dir":"%s","semantic_dir":"%s"}'
+        % (str(live_dir).replace("\\", "\\\\"),
+           str(semantic_dir).replace("\\", "\\\\"))
+    )
+    window._task_output("mission", message)
+    assert window.perception.timer.isActive()
+    assert window.perception.live_dir == live_dir
+    window.perception.stop()
+
+
 def test_runtime_controller_streams_process_output(qtbot, tmp_path):
     controller = RuntimeController()
     output = []

@@ -126,6 +126,7 @@ class RuntimeConfig:
     micro_xrce_agent: str = "/home/hw/Micro-XRCE-DDS-Agent/build/MicroXRCEAgent"
     log_dir: str = "/home/hw/logs"
     confidence: float = 0.25
+    perception_interval: float = 0.20
 
     @classmethod
     def defaults(cls, repo_root: Path) -> "RuntimeConfig":

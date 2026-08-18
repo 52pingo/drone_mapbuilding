@@ -104,6 +104,7 @@ class CommandBuilder:
             "-WslDistro", self.config.wsl_distro,
             "-WslUser", self.config.wsl_user,
             "-Confidence", f"{self.config.confidence:.3f}",
+            "-PerceptionInterval", f"{self.config.perception_interval:.3f}",
             "-Goals", plan.goals_string(),
             "-FlightZ", f"{plan.flight_z:.3f}",
             "-MaxMissionTime", f"{plan.max_mission_time:.1f}",

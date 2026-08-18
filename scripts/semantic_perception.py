@@ -16,6 +16,11 @@ import sys
 import time
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+try:
+    from scripts.perception_live import FrameRateMeter, LiveFrameWriter
+except ImportError:
+    from perception_live import FrameRateMeter, LiveFrameWriter
+
 
 @dataclasses.dataclass(frozen=True)
 class Detection:
@@ -141,6 +146,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-runtime", type=float, default=0.0)
     parser.add_argument("--max-events", type=int, default=0)
     parser.add_argument("--stop-file", default="")
+    parser.add_argument("--live-dir", default="")
     parser.add_argument("--source-image", default="")
     parser.add_argument(
         "--airsim-client",
@@ -348,6 +354,10 @@ def main() -> int:
         raise SystemExit(f"weights not found: {weights}")
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    live_writer = (
+        LiveFrameWriter(Path(args.live_dir).expanduser().resolve(), cv2)
+        if args.live_dir else None
+    )
 
     model = YOLO(str(weights), task="detect")
     tracker = ClassEvidenceTracker(
@@ -381,9 +391,12 @@ def main() -> int:
     events: List[dict] = []
     started = time.monotonic()
     frame_index = 0
+    fps_meter = FrameRateMeter()
     print(f"semantic perception ready: {weights.name}")
     print(f"classes: {', '.join(str(v) for v in model.names.values())}")
     print(f"evidence -> {output_dir}")
+    if live_writer is not None:
+        print(f"live feed -> {live_writer.directory}")
 
     while True:
         if args.stop_file and Path(args.stop_file).exists():
@@ -422,6 +435,7 @@ def main() -> int:
         )[0]
         detections = collect_detections(result, depth, frame.shape, args, np)
         frame_index += 1
+        live_fps = fps_meter.tick(time.monotonic())
         new_events = tracker.update(detections, time.monotonic())
 
         for detection in new_events:
@@ -468,6 +482,11 @@ def main() -> int:
                 f"CAPTURED label={detection.label} "
                 f"class_image={class_image_index} "
                 f"conf={detection.confidence:.3f}{depth_text} -> {image_path}"
+            )
+
+        if live_writer is not None:
+            live_writer.publish(
+                frame, detections, events, frame_index, live_fps
             )
 
         if args.source_image:

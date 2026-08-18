@@ -5,6 +5,7 @@ param(
     [double]$CaptureInterval = 4.0,
     [int]$MaxImagesPerClass = 20,
     [double]$MaxDepthM = 60.0,
+    [double]$PerceptionInterval = 0.20,
     [string]$Goals = '181.55,-583.34;-395.53,-409.16;-159.49,25.13;0,0',
     [double]$FlightZ = -15.0,
     [double]$MaxMissionTime = 1200.0,
@@ -33,8 +34,10 @@ if ([string]::IsNullOrWhiteSpace($ResultRoot)) {
 }
 $ResultRoot = [System.IO.Path]::GetFullPath($ResultRoot)
 $SemanticDir = Join-Path $ResultRoot 'detected_classes'
+$LiveDir = Join-Path $ResultRoot 'live_feed'
 $StopFile = Join-Path $ResultRoot 'semantic_stop.signal'
 New-Item -ItemType Directory -Force -Path $SemanticDir | Out-Null
+New-Item -ItemType Directory -Force -Path $LiveDir | Out-Null
 if (Test-Path -LiteralPath $StopFile) {
     Remove-Item -LiteralPath $StopFile -Force
 }
@@ -50,9 +53,17 @@ $perceptionArgs = @(
     '--capture-interval', $CaptureInterval.ToString([Globalization.CultureInfo]::InvariantCulture),
     '--max-images-per-class', $MaxImagesPerClass.ToString(),
     '--max-depth-m', $MaxDepthM.ToString([Globalization.CultureInfo]::InvariantCulture),
+    '--interval', $PerceptionInterval.ToString([Globalization.CultureInfo]::InvariantCulture),
+    '--live-dir', $LiveDir,
     '--stop-file', $StopFile
 )
 
+$sessionPayload = [ordered]@{
+    result_root = $ResultRoot
+    semantic_dir = $SemanticDir
+    live_dir = $LiveDir
+} | ConvertTo-Json -Compress
+Write-Output "GUI_SESSION $sessionPayload"
 Write-Host "Starting semantic perception -> $SemanticDir"
 $SemanticLog = Join-Path $SemanticDir 'perception.log'
 $SemanticErrorLog = Join-Path $SemanticDir 'perception_error.log'

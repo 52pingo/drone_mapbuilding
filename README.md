@@ -69,7 +69,7 @@ scripts/
   build_uav_semantic_dataset.py           合并/映射训练集
   collect_citypark_semantic_dataset.py    AirSim 分割标签采集
   train_uav_semantic.py                   Ultralytics 训练入口
-drone_gui/                                PySide6 桌面工作站（M2 控制面）
+drone_gui/                                PySide6 桌面工作站（M3 实时感知）
 tests/                                    VFH 与语义证据测试
 ```
 
@@ -368,9 +368,9 @@ reset 服务在当前组合中并不可靠，重启能同时清理 EKF 原点和
 `max_images_per_class`。类别必须连续出现指定帧数，且同类保存受时间间隔和数量上限
 控制。错误详情在 `detected_classes/perception_error.log`。
 
-## Qt GUI（M2 控制面已完成）
+## Qt GUI（M3 实时感知已接入）
 
-当前已实现可运行的 M1/M2 控制面：
+当前已实现可运行的 M1–M3 桌面工作站：
 
 - 深色工业控制风格主窗口、键盘可达的四页导航和统一状态栏；
 - UE4、工程、视觉 Python、AirSim Client、权重、WSL 和成果目录本地自检；
@@ -379,6 +379,10 @@ reset 服务在当前组合中并不可靠，重启能同时清理 EKF 原点和
 - NED 航点画布：双击添加、滚轮缩放、拖动画布、表格精确编辑、排序和返航点；
 - 航线距离、预计用时和安全参数校验，航线 JSON 保存/加载；
 - `GUI_STATUS` 结构化飞行状态、位置、armed 状态、最近障碍和任务耗时；
+- 感知进程以原子 JPEG + JSON 快照发布 AirSim RGB、YOLO 检测框、置信度、目标
+  深度、滚动 FPS 和当前分辨率，不会用大体积图像阻塞控制台或 Qt 主线程；
+- 实时页显示完整带框画面、本帧目标、累计确认类别、证据数量和每类首次发现截图；
+- 视觉流超过 3 秒未更新时明确显示断流告警，任务结束后保留最后一帧供复核；
 - Hold、Resume 和二次确认的安全 Land；Hold 仅在导航/扫描阶段可用，Land 复用原有
   接地稳定判定与普通 disarm 闭环，不提供空中强制解除锁定；
 - 实时感知页面的数据接口，以及已有类别图片、深度图、轨迹图、OctoMap 浏览；
@@ -419,9 +423,14 @@ $guiTests = Get-ChildItem .\tests\test_gui_*.py | Select-Object -Expand FullName
 /hw_insight/mission/land
 ```
 
-当前实时页尚未连接连续 RGB/检测消息，三维页面也尚未实现实时点云渲染；它们分别
-属于 M3 和 M4。M2 已接入飞控结构化状态与安全控制，但仍需在 UE4/PX4 全链路运行时
-完成一次 GUI 大环线实飞验收。
+每个任务的实时交换文件位于 `live_feed/`。带框 JPEG 使用轮转文件名并只保留最近
+三帧，`latest.json` 最后原子提交，因此 GUI 不会读到半写入图片；正式的类别证据仍
+完整保存在 `detected_classes/<class>/` 下。可通过 `gui_config.json` 中的
+`perception_interval` 调整采样间隔，默认 `0.20 s`。
+
+M3 已使用本地 `best.pt` 完成真实图片推理、带框帧、类别 JSON 和首次证据界面验证。
+三维页面尚未实现实时点云渲染，属于 M4；M2/M3 仍需在 UE4/PX4 全链路运行时完成
+一次 GUI 大环线飞行与持续 RGB 流现场验收。
 
 ### 后续规划
 

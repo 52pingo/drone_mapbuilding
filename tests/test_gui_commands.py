@@ -57,3 +57,4 @@ def test_mission_command_contains_validated_route(tmp_path):
     goals_index = command.arguments.index("-Goals") + 1
     assert command.arguments[goals_index].endswith(";0,0")
     assert "-ResultRoot" in command.arguments
+    assert "-PerceptionInterval" in command.arguments

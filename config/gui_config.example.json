@@ -12,5 +12,6 @@
   "px4_dir": "/home/hw/px4v1.15.2",
   "micro_xrce_agent": "/home/hw/Micro-XRCE-DDS-Agent/build/MicroXRCEAgent",
   "log_dir": "/home/hw/logs",
-  "confidence": 0.25
+  "confidence": 0.25,
+  "perception_interval": 0.20
 }
