@@ -1,5 +1,5 @@
 #!/bin/bash
-# CityPark perimeter loop: three broad legs and a return to the safe spawn.
+# Generic AirSim mission runner. Coordinates are local PX4 NED metres.
 set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,12 +21,10 @@ trap stop_map_bridge EXIT
 trap 'stop_map_bridge; exit 130' INT
 trap 'stop_map_bridge; exit 143' TERM
 
-# Coordinates are PX4 local NED metres relative to the safe CityPark spawn
-# (AirSim world X=-134.09, Y=258.15).  The three remote points are verified
-# paved/playground regions, producing one large clockwise loop without zigzags.
-GOALS="${CITYPARK_GOALS:-181.55,-583.34;-395.53,-409.16;-159.49,25.13;0,0}"
-FLIGHT_Z="${CITYPARK_FLIGHT_Z:--15.0}"
-MAX_TIME="${CITYPARK_MAX_TIME:-1200.0}"
+GOALS="${DRONE_GOALS:-${CITYPARK_GOALS:-181.55,-583.34;-395.53,-409.16;-159.49,25.13;0,0}}"
+FLIGHT_Z="${DRONE_FLIGHT_Z:-${CITYPARK_FLIGHT_Z:--15.0}}"
+MAX_TIME="${DRONE_MAX_TIME:-${CITYPARK_MAX_TIME:-1200.0}}"
+ENVIRONMENT_NAME="${DRONE_ENVIRONMENT_NAME:-CityPark}"
 
 source /opt/ros/humble/setup.bash
 source "$ROS_WORKSPACE/install/setup.bash"
@@ -69,9 +67,9 @@ if ! kill -0 "$MAP_BRIDGE_PID" 2>/dev/null; then
     MAP_BRIDGE_PID=""
 fi
 
-echo "== 启动 CityPark 大环线 VFH 任务 =="
+echo "== 启动 $ENVIRONMENT_NAME VFH 任务 =="
 echo "goals=$GOALS flight_z=$FLIGHT_Z"
-MISSION_CONSOLE_LOG="$LOG_DIR/citypark_mission_console.log"
+MISSION_CONSOLE_LOG="$LOG_DIR/mission_console.log"
 python3 "$SCRIPT_DIR/run_avoid_mission.py" --ros-args \
     -p goals:="$GOALS" \
     -p flight_z:="$FLIGHT_Z" \
@@ -84,14 +82,14 @@ python3 "$SCRIPT_DIR/run_avoid_mission.py" --ros-args \
 echo "== 生成轨迹图与 OctoMap 图 =="
 python3 "$SCRIPT_DIR/plot_flight.py" \
     "$LOG_DIR/avoid_flight.log" \
-    "$LOG_DIR/flight_trajectory_citypark_loop.png" \
+    "$LOG_DIR/flight_trajectory.png" \
     "$GOALS" \
-    "CityPark"
+    "$ENVIRONMENT_NAME"
 timeout 30 python3 "$SCRIPT_DIR/render_map.py" \
-    "$LOG_DIR/octomap_map_citypark_loop.png"
+    "$LOG_DIR/octomap_map.png"
 timeout 15 python3 "$SCRIPT_DIR/capture_depth_topic.py" \
-    "$LOG_DIR/depth_rviz_citypark.png"
-MAP_BT="$LOG_DIR/octomap_citypark_loop.bt"
+    "$LOG_DIR/depth_rviz.png"
+MAP_BT="$LOG_DIR/octomap.bt"
 if ! timeout 30 ros2 run octomap_server octomap_saver_node --ros-args \
     -p octomap_path:="$MAP_BT" -p full:=false; then
     echo "warning: OctoMap BT export failed"
@@ -101,13 +99,13 @@ stop_map_bridge
 echo "== 拷回 Windows 交付目录 =="
 mkdir -p "$WIN_DEST"
 cp "$LOG_DIR/avoid_flight.log" "$WIN_DEST/"
-cp "$LOG_DIR/flight_trajectory_citypark_loop.png" "$WIN_DEST/"
-cp "$LOG_DIR/octomap_map_citypark_loop.png" "$WIN_DEST/"
-cp "$LOG_DIR/depth_rviz_citypark.png" "$WIN_DEST/"
+cp "$LOG_DIR/flight_trajectory.png" "$WIN_DEST/"
+cp "$LOG_DIR/octomap_map.png" "$WIN_DEST/"
+cp "$LOG_DIR/depth_rviz.png" "$WIN_DEST/"
 cp "$MISSION_CONSOLE_LOG" "$WIN_DEST/mission_console.log"
 cp "$MAP_BRIDGE_LOG" "$WIN_DEST/map_bridge.log" 2>/dev/null || true
 if [ -f "$MAP_BT" ]; then
-    cp "$MAP_BT" "$WIN_DEST/octomap_citypark_loop.bt"
+    cp "$MAP_BT" "$WIN_DEST/octomap.bt"
 fi
 
 echo "== 完成：$WIN_DEST =="

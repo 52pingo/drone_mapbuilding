@@ -37,11 +37,29 @@ def test_main_window_navigation_and_accessible_surfaces(qtbot, tmp_path):
     qtbot.addWidget(window)
     window.show()
 
-    assert window.shell.pages.count() == 4
+    assert window.shell.pages.count() == 5
     assert window.shell.log.accessibleName() == "外部任务实时日志"
-    window.shell.page_requested.emit(1)
-    assert window.shell.pages.currentIndex() == 1
+    window.shell.page_requested.emit(MainWindow.MISSION_PAGE)
+    assert window.shell.pages.currentIndex() == MainWindow.MISSION_PAGE
     assert window.shell.page_title.text() == "航线规划"
+
+
+def test_environment_page_applies_standalone_simulator(qtbot, tmp_path):
+    config = RuntimeConfig.defaults(tmp_path)
+    config.results_dir = tmp_path / "results"
+    window = MainWindow(config, tmp_path / "gui_config.json")
+    qtbot.addWidget(window)
+    simulator = tmp_path / "Park.exe"
+    simulator.write_bytes(b"exe")
+    page = window.environment_page
+    page.simulation.mode.setCurrentIndex(page.simulation.mode.findData("standalone"))
+    page.simulation.name.setText("Local Park")
+    page.simulation.executable.set_value(simulator)
+    with qtbot.waitSignal(page.config_saved, timeout=1000):
+        page._save()
+    assert window.config.ue4_launch_mode == "standalone"
+    assert window.config.ue4_executable == simulator
+    assert window.config.environment_name == "Local Park"
 
 
 def test_main_window_accepts_structured_done_only_when_disarmed(qtbot, tmp_path):

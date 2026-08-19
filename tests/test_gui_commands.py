@@ -25,6 +25,16 @@ def test_ue4_command_uses_argument_array(tmp_path):
     assert command.program == "powershell.exe"
     assert "-Ue4EditorPath" in command.arguments
     assert str(builder.config.ue4_project) in command.arguments
+    assert command.arguments[command.arguments.index("-LaunchMode") + 1] == "editor"
+
+
+def test_ue4_command_supports_packaged_environment(tmp_path):
+    config = make_config(tmp_path)
+    config.ue4_launch_mode = "standalone"
+    config.ue4_executable = tmp_path / "Park.exe"
+    command = CommandBuilder(config).launch_ue4()
+    assert str(config.ue4_executable) in command.arguments
+    assert command.arguments[command.arguments.index("-LaunchMode") + 1] == "standalone"
 
 
 def test_stack_command_forwards_runtime_paths(tmp_path):
@@ -58,3 +68,21 @@ def test_mission_command_contains_validated_route(tmp_path):
     assert command.arguments[goals_index].endswith(";0,0")
     assert "-ResultRoot" in command.arguments
     assert "-PerceptionInterval" in command.arguments
+    assert "-EnvironmentName" in command.arguments
+    assert "-RosWorkspace" in command.arguments
+
+
+def test_setup_command_forwards_all_workflow_locations(tmp_path):
+    config = make_config(tmp_path)
+    command = CommandBuilder(config).setup_environment("check")
+    assert command.program == "powershell.exe"
+    assert "-WslDistro" in command.arguments
+    assert config.ros_workspace in command.arguments
+    assert str(config.ue4_project) in command.arguments
+
+
+def test_qgc_command_requires_configured_path(tmp_path):
+    config = make_config(tmp_path)
+    config.qgc_executable = None
+    with pytest.raises(ValueError):
+        CommandBuilder(config).launch_qgc()

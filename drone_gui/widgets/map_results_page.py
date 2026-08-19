@@ -22,6 +22,10 @@ class MapResultsPage(QWidget):
     def refresh(self) -> None:
         self.results.refresh()
 
+    def set_results_dir(self, results_dir) -> None:
+        self.results.results_dir = results_dir
+        self.results.refresh()
+
     def start_session(self, session: dict) -> None:
         self.map_view.start_session(session)
 

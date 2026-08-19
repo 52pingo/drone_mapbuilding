@@ -9,6 +9,12 @@ param(
     [string]$Goals = '181.55,-583.34;-395.53,-409.16;-159.49,25.13;0,0',
     [double]$FlightZ = -15.0,
     [double]$MaxMissionTime = 1200.0,
+    [string]$EnvironmentName = 'CityPark',
+    [string]$AirSimClientPath = '',
+    [string]$VehicleName = 'PX4',
+    [string]$CameraName = 'CameraDepth',
+    [string]$RosWorkspace = '/home/hw/hw-ros2/ros2',
+    [string]$LogDir = '/home/hw/logs',
     [string]$ResultRoot = '',
     [string]$Python = 'C:\Users\29593\anaconda3\envs\deeplearning\python.exe',
     [string]$WslDistro = 'Ubuntu-22.04',
@@ -30,7 +36,8 @@ if (-not (Test-Path -LiteralPath $Weights)) {
 
 if ([string]::IsNullOrWhiteSpace($ResultRoot)) {
     $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-    $ResultRoot = Join-Path $Workspace "results\citypark_semantic_$stamp"
+    $safeEnvironment = $EnvironmentName -replace '[^A-Za-z0-9_-]', '_'
+    $ResultRoot = Join-Path $Workspace "results\$safeEnvironment`_semantic_$stamp"
 }
 $ResultRoot = [System.IO.Path]::GetFullPath($ResultRoot)
 $SemanticDir = Join-Path $ResultRoot 'detected_classes'
@@ -48,7 +55,7 @@ if (Test-Path -LiteralPath $StopFile) {
 $archiveInitArgs = @(
     $ArchiveScript, 'init',
     '--root', $ResultRoot,
-    '--name', 'CityPark 大环线',
+    '--name', "$EnvironmentName 自主避障任务",
     '--goals', $Goals,
     '--flight-z', $FlightZ.ToString([Globalization.CultureInfo]::InvariantCulture),
     '--max-mission-time', $MaxMissionTime.ToString([Globalization.CultureInfo]::InvariantCulture),
@@ -75,6 +82,10 @@ $perceptionArgs = @(
     '--live-dir', $LiveDir,
     '--stop-file', $StopFile
 )
+if (-not [string]::IsNullOrWhiteSpace($AirSimClientPath)) {
+    $perceptionArgs += @('--airsim-client', $AirSimClientPath)
+}
+$perceptionArgs += @('--vehicle', $VehicleName, '--camera', $CameraName)
 
 $sessionPayload = [ordered]@{
     result_root = $ResultRoot
@@ -105,17 +116,21 @@ try {
     $wslWorkspace = "/mnt/$workspaceDrive$workspaceTail"
     $wslMissionScript = "/mnt/$workspaceDrive$workspaceTail/scripts/run_citypark_loop_inner.sh"
     $previousWslEnv = $env:WSLENV
-    $env:CITYPARK_GOALS = $Goals
-    $env:CITYPARK_FLIGHT_Z = $FlightZ.ToString(
+    $env:DRONE_GOALS = $Goals
+    $env:DRONE_FLIGHT_Z = $FlightZ.ToString(
         '0.0###', [Globalization.CultureInfo]::InvariantCulture
     )
-    $env:CITYPARK_MAX_TIME = $MaxMissionTime.ToString(
+    $env:DRONE_MAX_TIME = $MaxMissionTime.ToString(
         '0.0###', [Globalization.CultureInfo]::InvariantCulture
     )
     $env:DRONE_MAPBUILDING_ROOT_WSL = $wslWorkspace
+    $env:DRONE_ENVIRONMENT_NAME = $EnvironmentName
+    $env:ROS_WORKSPACE = $RosWorkspace
+    $env:LOG_DIR = $LogDir
     $forwardVariables = (
-        'CITYPARK_GOALS/u:CITYPARK_FLIGHT_Z/u:CITYPARK_MAX_TIME/u:' +
-        'DRONE_MAPBUILDING_ROOT_WSL/u'
+        'DRONE_GOALS/u:DRONE_FLIGHT_Z/u:DRONE_MAX_TIME/u:' +
+        'DRONE_MAPBUILDING_ROOT_WSL/u:DRONE_ENVIRONMENT_NAME/u:' +
+        'ROS_WORKSPACE/u:LOG_DIR/u'
     )
     $env:WSLENV = if ([string]::IsNullOrWhiteSpace($previousWslEnv)) {
         $forwardVariables
@@ -126,16 +141,19 @@ try {
         $wslMissionScript `
         $wslDestination.Trim()
     if ($LASTEXITCODE -ne 0) {
-        throw "CityPark mission failed with exit code $LASTEXITCODE"
+        throw "$EnvironmentName mission failed with exit code $LASTEXITCODE"
     }
     $MissionSucceeded = $true
 }
 finally {
     $env:WSLENV = $previousWslEnv
-    Remove-Item Env:CITYPARK_GOALS -ErrorAction SilentlyContinue
-    Remove-Item Env:CITYPARK_FLIGHT_Z -ErrorAction SilentlyContinue
-    Remove-Item Env:CITYPARK_MAX_TIME -ErrorAction SilentlyContinue
+    Remove-Item Env:DRONE_GOALS -ErrorAction SilentlyContinue
+    Remove-Item Env:DRONE_FLIGHT_Z -ErrorAction SilentlyContinue
+    Remove-Item Env:DRONE_MAX_TIME -ErrorAction SilentlyContinue
     Remove-Item Env:DRONE_MAPBUILDING_ROOT_WSL -ErrorAction SilentlyContinue
+    Remove-Item Env:DRONE_ENVIRONMENT_NAME -ErrorAction SilentlyContinue
+    Remove-Item Env:ROS_WORKSPACE -ErrorAction SilentlyContinue
+    Remove-Item Env:LOG_DIR -ErrorAction SilentlyContinue
     New-Item -ItemType File -Force -Path $StopFile | Out-Null
     if (-not $perception.WaitForExit(15000)) {
         Stop-Process -Id $perception.Id -Force

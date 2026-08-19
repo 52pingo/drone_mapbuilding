@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass, field, fields
 import json
 import math
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
 
 CITYPARK_GOALS = (
@@ -119,6 +119,14 @@ class RuntimeConfig:
     airsim_client: Path
     weights: Path
     results_dir: Path
+    environment_name: str = "CityPark"
+    ue4_launch_mode: str = "editor"
+    ue4_executable: Optional[Path] = None
+    airsim_settings: Optional[Path] = None
+    qgc_executable: Optional[Path] = None
+    ue4_validation: str = "auto"
+    airsim_vehicle: str = "PX4"
+    airsim_camera: str = "CameraDepth"
     wsl_distro: str = "Ubuntu-22.04"
     wsl_user: str = "hw"
     ros_workspace: str = "/home/hw/hw-ros2/ros2"
@@ -145,6 +153,12 @@ class RuntimeConfig:
             ),
             weights=asset_root / "best.pt",
             results_dir=asset_root / "results",
+            environment_name="CityPark",
+            ue4_launch_mode="editor",
+            airsim_settings=repo_root / "config" / "airsim_settings.citypark.example.json",
+            qgc_executable=Path(
+                r"E:\无人机视觉避障建图\QGroundControl\bin\QGroundControl.exe"
+            ),
         )
 
     @classmethod
@@ -155,13 +169,18 @@ class RuntimeConfig:
         payload = json.loads(path.read_text(encoding="utf-8"))
         path_names = {
             "repo_root", "ue4_editor", "ue4_project", "perception_python",
-            "airsim_client", "weights", "results_dir",
+            "airsim_client", "weights", "results_dir", "ue4_executable",
+            "airsim_settings", "qgc_executable",
         }
         known = {item.name for item in fields(cls)}
         for name, value in payload.items():
             if name not in known:
                 continue
-            setattr(config, name, Path(value) if name in path_names else value)
+            setattr(
+                config,
+                name,
+                Path(value) if name in path_names and value else value,
+            )
         config.repo_root = repo_root.resolve()
         return config
 

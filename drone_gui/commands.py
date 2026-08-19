@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PureWindowsPath
+import re
 from typing import Sequence
 
 from drone_gui.models import MissionPlan, RuntimeConfig
@@ -43,11 +44,43 @@ class CommandBuilder:
         args = [
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script),
             "-TimeoutSeconds", "300",
+            "-LaunchMode", self.config.ue4_launch_mode,
             "-Ue4EditorPath", str(self.config.ue4_editor),
             "-ProjectPath", str(self.config.ue4_project),
+            "-StandaloneExecutable", str(self.config.ue4_executable or ""),
             "-Map", self.config.ue4_map,
             "-Python", str(self.config.perception_python),
             "-AirSimClientPath", str(self.config.airsim_client),
+            "-ValidationMode", self.config.ue4_validation,
+            "-VehicleName", self.config.airsim_vehicle,
+            "-CameraName", self.config.airsim_camera,
+        ]
+        return CommandSpec("powershell.exe", args, self.config.repo_root)
+
+    def launch_qgc(self) -> CommandSpec:
+        if self.config.qgc_executable is None:
+            raise ValueError("尚未配置 QGroundControl 路径")
+        return CommandSpec(
+            str(self.config.qgc_executable), (), self.config.qgc_executable.parent
+        )
+
+    def setup_environment(self, mode: str) -> CommandSpec:
+        if mode not in {"check", "install"}:
+            raise ValueError(f"不支持的环境配置模式：{mode}")
+        script = self.config.repo_root / "scripts" / "setup_workflow_environment.ps1"
+        args = [
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script),
+            "-Mode", mode,
+            "-PerceptionPython", str(self.config.perception_python),
+            "-AirSimClientPath", str(self.config.airsim_client),
+            "-AirSimSettings", str(self.config.airsim_settings or ""),
+            "-QgcExecutable", str(self.config.qgc_executable or ""),
+            "-Ue4Project", str(self.config.ue4_project),
+            "-WslDistro", self.config.wsl_distro,
+            "-WslUser", self.config.wsl_user,
+            "-RosWorkspace", self.config.ros_workspace,
+            "-Px4Dir", self.config.px4_dir,
+            "-MicroXrceAgent", self.config.micro_xrce_agent,
         ]
         return CommandSpec("powershell.exe", args, self.config.repo_root)
 
@@ -95,7 +128,8 @@ class CommandBuilder:
 
     def run_mission(self, plan: MissionPlan) -> CommandSpec:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        result_root = self.config.results_dir / f"gui_citypark_{stamp}"
+        slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", self.config.environment_name).strip("_")
+        result_root = self.config.results_dir / f"gui_{slug or 'environment'}_{stamp}"
         script = self.config.repo_root / "scripts" / "run_citypark_semantic_mission.ps1"
         args = [
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script),
@@ -105,6 +139,12 @@ class CommandBuilder:
             "-WslUser", self.config.wsl_user,
             "-Confidence", f"{self.config.confidence:.3f}",
             "-PerceptionInterval", f"{self.config.perception_interval:.3f}",
+            "-EnvironmentName", self.config.environment_name,
+            "-AirSimClientPath", str(self.config.airsim_client),
+            "-VehicleName", self.config.airsim_vehicle,
+            "-CameraName", self.config.airsim_camera,
+            "-RosWorkspace", self.config.ros_workspace,
+            "-LogDir", self.config.log_dir,
             "-Goals", plan.goals_string(),
             "-FlightZ", f"{plan.flight_z:.3f}",
             "-MaxMissionTime", f"{plan.max_mission_time:.1f}",

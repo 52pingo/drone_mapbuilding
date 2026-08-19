@@ -381,12 +381,18 @@ reset 服务在当前组合中并不可靠，重启能同时清理 EKF 原点和
 `max_images_per_class`。类别必须连续出现指定帧数，且同类保存受时间间隔和数量上限
 控制。错误详情在 `detected_classes/perception_error.log`。
 
-## Qt GUI（M5 Session 归档、回放与打包已接入）
+## Qt GUI（M6 多仿真环境与一键配置已接入）
 
-当前已实现可运行的 M1–M5 桌面工作站：
+当前已实现可运行的 M1–M6 桌面工作站：
 
-- 深色工业控制风格主窗口、键盘可达的四页导航和统一状态栏；
-- UE4、工程、视觉 Python、AirSim Client、权重、WSL 和成果目录本地自检；
+- 深色工业控制风格主窗口、键盘可达的五页导航和统一状态栏；
+- “环境配置”可选择任意接入 AirSim 的 `.uproject`，也可选择已打包 UE4 仿真
+  `.exe`；环境名称、地图资源、载具和深度相机均可独立配置并持久化；
+- UE4、工程、视觉 Python、AirSim Client、QGC、权重、WSL 和成果目录本地自检；
+- UE4 窗口状态与 AirSim RPC/RGB/深度状态分开呈现，不再把 Python 依赖错误误报为
+  “UE4 没有打开”；非 CityPark 环境使用通用 RGB/DepthPerspective 验证；
+- “配置能力体检”和“一键配置 / 修复”可幂等检查或补齐 AirSim Python 依赖、
+  AirSim ROS2 源码、ROS2 Humble、PX4 v1.15.2、Micro XRCE-DDS Agent 和 QGC；
 - 使用 `QProcess` 异步启动 UE4、PX4/ROS2 堆栈和完整语义任务，实时汇总日志；
 - WSL 动态检查 PX4、Micro XRCE-DDS、AirSim ROS、位置遥测、深度和 OctoMap 话题；
 - NED 航点画布：双击添加、滚轮缩放、拖动画布、表格精确编辑、排序和返航点；
@@ -421,6 +427,24 @@ M4 的真实 CityPark 点云、坐标校准、YOLO 语义叠加和 PLY/JSON/PNG 
 [`docs/VALIDATION_2026-08-18_M4.md`](docs/VALIDATION_2026-08-18_M4.md)。
 M5 的 Session 恢复、遥测回放、PCD/HTML 和 Windows EXE 验收见
 [`docs/VALIDATION_2026-08-18_M5.md`](docs/VALIDATION_2026-08-18_M5.md)。
+M6 的多环境选择、打包依赖修复和一键配置体检见
+[`docs/VALIDATION_2026-08-19_M6.md`](docs/VALIDATION_2026-08-19_M6.md)。
+
+### 发布版首次使用（M6）
+
+1. 解压 `DroneMapbuilding-win64.zip`，保持 `DroneMapbuilding.exe`、`_internal`、
+   `scripts`、`config`、`ros2_ws` 和 `.tools` 的相对位置，不要只复制 EXE。
+2. 把 `best.pt` 放到 EXE 同目录，启动 EXE，进入“环境配置”。
+3. “启动方式”选择 UE4 编辑器工程或已打包仿真程序；选择本地工程、地图和
+   `AirSim/settings.json`，再检查工作流路径并点击“保存并应用”。
+4. 先点“配置能力体检”。缺少组件时点“一键配置 / 修复”；首次安装 ROS2/PX4
+   可能耗时 30–90 分钟，若 WSL 首次安装要求重启，重启后再次点击即可继续。
+5. 进入“系统自检”，依次启动 UE4、PX4/ROS2 并做动态检查，全部必需项通过后再
+   进入航线规划。
+
+一键配置不会自动下载需要 Epic 账号和许可证确认的 UE4 Editor；它使用操作者选择的
+本地 UE4 工程，并配置本工作流所需的 PX4、AirSim、ROS2、DDS 和 QGC。应用新的
+`AirSim settings.json` 前，脚本会把原文件保存为带时间戳的备份。
 
 建立并启动独立环境：
 
@@ -461,7 +485,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -File .\scripts\build_gui.ps1
 
 # 输出：dist\DroneMapbuilding\ 和 dist\DroneMapbuilding-win64.zip
-# 把 best.pt 放到 EXE 同目录，并复制/修改 config\gui_config.example.json。
+# 把 best.pt 放到 EXE 同目录；其余路径可直接在“环境配置”页选择并保存。
 ```
 
 异常退出或旧版本任务可从命令行重建 Session；此操作不会伪造闭环状态：
@@ -471,7 +495,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
   --root .\results\citypark_semantic_YYYYMMDD_HHMMSS
 ```
 
-“系统与自检”中的“本地 + WSL 动态检查”必须完成且所有必需组件通过，GUI 才允许
+“系统自检”中的“本地 + WSL 动态检查”必须完成且所有必需组件通过，GUI 才允许
 开始任务。任务运行时，ROS2 提供以下 `std_srvs/Trigger` 服务：
 
 ```text
@@ -491,6 +515,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 
 M4 已完成真实 CityPark 深度、约 5 Hz OctoMap、29,651 点和 7 个三维语义标签验收。
 M5 已用 756 秒历史完整飞行恢复 1,524 帧回放，并实际构建、启动 Windows EXE。
+M6 已修复发布包遗漏 AirSim RPC 兼容依赖的问题；真实 UE4 启动、AirSim RPC、RGB/
+深度验证以及 PX4/ROS2/XRCE/QGC 配置体检均已通过。
 新加入的 BT 与全套 Session 自动归档会在下一次 GUI 大环线中随任务结束自动执行；
 现阶段无需为验证回放而重复飞行该耗时航线。
 

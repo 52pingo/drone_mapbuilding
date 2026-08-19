@@ -1,11 +1,12 @@
 # Qt 无人机避障建图工作站：功能与实施方案
 
-> 实施状态（2026-08-18）：M1–M5 已实现，完成 PySide6 主窗口、本地/WSL 动态
+> 实施状态（2026-08-19）：M1–M6 已实现，完成 PySide6 主窗口、本地/WSL 动态
 > 自检、NED 航点编辑、结构化飞行遥测、Hold/Resume/Safe Land，以及 AirSim RGB、
 > YOLO 框、类别证据和首次发现截图的实时共享文件协议。已用 `best.pt` 做真实图片
 > 端到端验证；M4 已加入 OctoMap 原子快照、三维点云/轨迹、语义反投影与稳定标签、
 > PLY/PCD/JSON/PNG/HTML 导出、BT 任务导出、Session 清单、遥测时间轴、旧任务恢复
-> 和 PyInstaller 发布目录。M4 真实连续点云和 M5 Windows EXE 已完成现场验收。
+> 和 PyInstaller 发布目录。M4 真实连续点云、M5 Windows EXE，以及 M6 多 UE4
+> 环境选择与工作流一键配置均已完成现场验收。
 
 ## 1. 产品目标
 
@@ -182,6 +183,17 @@ sessions/<timestamp>_<mission>/
   运行 PyInstaller Windows 发布目录。新任务 BT 自动落盘等待下一次大环线随飞验收。
 - PCD/PLY/BT/JSON/PNG/HTML 导出、Session 回放、异常恢复、打包。
 - 验收：导出的 Session 可在无 UE4/ROS 环境中重新打开并查看。
+
+### M6：多仿真环境与环境配置（已完成）
+
+- 新增独立“环境配置”页，可选择 UE4 Editor + `.uproject` 或已打包仿真 `.exe`；
+  地图、AirSim settings、载具/相机、视觉 Python、权重、QGC 和 WSL 路径均可编辑。
+- GUI 配置原子保存；切换后启动命令、自检、任务结果命名和语义感知立即使用当前环境。
+- UE4 窗口成功与 AirSim RGB/深度验证分开反馈，打包目录携带 4.6 MB RPC 兼容依赖。
+- 一键体检/修复脚本按官方兼容组合配置 ROS2 Humble、PX4 v1.15.2、Micro
+  XRCE-DDS 2.4.2、AirSim v1.8.1 ROS2/PythonClient 与 QGroundControl。
+- 验收：真实 CityPark 启动得到有效公制深度；本机所有配置组件体检通过；发布 EXE
+  可直接打开新增页面，且不依赖源码目录中的 `.tools`。
 
 单人开发预计 4–6 周得到可演示且可持续迭代的首版。建议优先完成 M1–M3，
 先交付“能规划、能飞、能看框、能安全结束”的版本，再加入三维语义融合；

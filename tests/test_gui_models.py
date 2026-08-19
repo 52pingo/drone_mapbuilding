@@ -42,3 +42,17 @@ def test_runtime_defaults_find_assets_in_parent(tmp_path):
     config = RuntimeConfig.defaults(repo)
     assert config.weights == tmp_path / "best.pt"
     assert config.results_dir == tmp_path / "results"
+
+
+def test_runtime_config_loads_optional_environment_paths(tmp_path):
+    config_path = tmp_path / "gui.json"
+    config_path.write_text(
+        '{"environment_name":"Park","ue4_launch_mode":"standalone",'
+        '"ue4_executable":"D:\\\\Park\\\\Park.exe","qgc_executable":null}',
+        encoding="utf-8",
+    )
+    config = RuntimeConfig.load(config_path, tmp_path)
+    assert config.environment_name == "Park"
+    assert config.ue4_launch_mode == "standalone"
+    assert config.ue4_executable == Path(r"D:\Park\Park.exe")
+    assert config.qgc_executable is None

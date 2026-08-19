@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication
 
 from drone_gui.main_window import MainWindow
 from drone_gui.app_paths import application_root
+from drone_gui.config_store import find_config
 from drone_gui.models import RuntimeConfig
 from drone_gui.sessions import session_payload
 from drone_gui.theme import APP_STYLESHEET
@@ -24,15 +25,14 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--session-dir", type=Path, default=None,
         help="open an existing result directory and attach its live snapshots",
     )
-    parser.add_argument("--page", type=int, choices=range(4), default=0)
+    parser.add_argument("--page", type=int, choices=range(5), default=0)
     return parser.parse_args(argv)
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
     repo_root = application_root()
-    default_config = repo_root / "config" / "gui_config.json"
-    config_path = args.config or (default_config if default_config.is_file() else None)
+    config_path = args.config or find_config(repo_root)
     config = RuntimeConfig.load(config_path, repo_root)
     config.results_dir.mkdir(parents=True, exist_ok=True)
 
@@ -42,8 +42,8 @@ def main(argv=None) -> int:
     app.setStyle("Fusion")
     app.setFont(QFont("Microsoft YaHei UI", 10))
     app.setStyleSheet(APP_STYLESHEET)
-    window = MainWindow(config)
-    window.shell.show_page(3 if args.session_dir else args.page)
+    window = MainWindow(config, config_path)
+    window.shell.show_page(MainWindow.RESULTS_PAGE if args.session_dir else args.page)
     if args.session_dir:
         root = args.session_dir.resolve()
         session = session_payload(root, offline=True)

@@ -31,6 +31,8 @@ def main():
     parser.add_argument("--airsim-client", default=AIRSIM_CLIENT)
     parser.add_argument("--airsim-rpc-vendor", default=RPC_DEPS)
     parser.add_argument("--depth-breaking-volume", default=DEPTH_BREAKING_VOLUME)
+    parser.add_argument("--vehicle", default="PX4")
+    parser.add_argument("--camera", default="CameraDepth")
     args = parser.parse_args()
 
     airsim = import_airsim(args.airsim_client, args.airsim_rpc_vendor)
@@ -69,9 +71,9 @@ def main():
 
     response = client.simGetImages(
         [airsim.ImageRequest(
-            "CameraDepth", airsim.ImageType.DepthPerspective, True, False
+            args.camera, airsim.ImageType.DepthPerspective, True, False
         )],
-        vehicle_name="PX4",
+        vehicle_name=args.vehicle,
     )[0]
     values = sorted(
         float(value)
