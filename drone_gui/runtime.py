@@ -3,11 +3,54 @@
 from __future__ import annotations
 
 import locale
+import os
+from pathlib import Path
+import sys
 from typing import Dict
 
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, Signal
 
 from drone_gui.commands import CommandSpec
+
+
+def _sanitize_search_path(value: str, bundle_root: Path) -> str:
+    """Remove PyInstaller bundle directories before launching system tools."""
+    root = bundle_root.resolve()
+    clean = []
+    for item in value.split(os.pathsep):
+        if not item:
+            continue
+        try:
+            candidate = Path(item.strip('"')).resolve()
+            if candidate == root or candidate.is_relative_to(root):
+                continue
+        except (OSError, RuntimeError, ValueError):
+            pass
+        clean.append(item)
+    return os.pathsep.join(clean)
+
+
+def _external_process_environment() -> QProcessEnvironment:
+    environment = QProcessEnvironment.systemEnvironment()
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if getattr(sys, "frozen", False) and bundle_root:
+        path_value = environment.value("PATH")
+        environment.insert(
+            "PATH", _sanitize_search_path(path_value, Path(bundle_root))
+        )
+        environment.remove("_MEIPASS2")
+    environment.insert("PYTHONUTF8", "1")
+    environment.insert("PYTHONIOENCODING", "utf-8")
+    return environment
+
+
+def _set_frozen_dll_directory(path: str | None) -> None:
+    """Control the Windows loader path inherited by external child processes."""
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return
+    import ctypes
+    if not ctypes.windll.kernel32.SetDllDirectoryW(path):
+        raise OSError("SetDllDirectoryW failed")
 
 
 class RuntimeController(QObject):
@@ -35,10 +78,7 @@ class RuntimeController(QObject):
         process = QProcess(self)
         process.setWorkingDirectory(str(spec.working_directory))
         process.setProcessChannelMode(QProcess.MergedChannels)
-        environment = QProcessEnvironment.systemEnvironment()
-        environment.insert("PYTHONUTF8", "1")
-        environment.insert("PYTHONIOENCODING", "utf-8")
-        process.setProcessEnvironment(environment)
+        process.setProcessEnvironment(_external_process_environment())
         process.readyReadStandardOutput.connect(
             lambda name=task_name, proc=process: self._read_output(name, proc)
         )
@@ -55,7 +95,20 @@ class RuntimeController(QObject):
         )
         self._processes[task_name] = process
         self._buffers[task_name] = ""
-        process.start(spec.program, list(spec.arguments))
+        # PyInstaller points SetDllDirectoryW at ``sys._MEIPASS``. Windows
+        # child processes inherit that search path; without temporarily
+        # clearing it, UE4 can load MSVCP140.dll from this GUI package and
+        # keep the package locked.  QProcess creates the OS process during
+        # start()/waitForStarted(), after which the GUI's bundle path is safe
+        # to restore.
+        bundle_root = getattr(sys, "_MEIPASS", None)
+        try:
+            _set_frozen_dll_directory(None)
+            process.start(spec.program, list(spec.arguments))
+            process.waitForStarted(3000)
+        finally:
+            if bundle_root:
+                _set_frozen_dll_directory(str(bundle_root))
         return True
 
     def _read_output(self, task_name: str, process: QProcess) -> None:

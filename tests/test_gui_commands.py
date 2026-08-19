@@ -26,6 +26,7 @@ def test_ue4_command_uses_argument_array(tmp_path):
     assert "-Ue4EditorPath" in command.arguments
     assert str(builder.config.ue4_project) in command.arguments
     assert command.arguments[command.arguments.index("-LaunchMode") + 1] == "editor"
+    assert command.arguments[command.arguments.index("-ExistingInstancePolicy") + 1] == "reuse"
 
 
 def test_ue4_command_supports_packaged_environment(tmp_path):

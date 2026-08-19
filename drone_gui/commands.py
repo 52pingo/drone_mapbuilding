@@ -52,6 +52,7 @@ class CommandBuilder:
             "-Python", str(self.config.perception_python),
             "-AirSimClientPath", str(self.config.airsim_client),
             "-ValidationMode", self.config.ue4_validation,
+            "-ExistingInstancePolicy", "reuse",
             "-VehicleName", self.config.airsim_vehicle,
             "-CameraName", self.config.airsim_camera,
         ]

@@ -60,5 +60,47 @@ for attempt in 1 2 3; do
     start_launch
 done
 
+# Do not tell the GUI that the stack is ready merely because the launch
+# process exists.  AirSim cameras and OctoMap can need tens of seconds after
+# ROS discovery.  Waiting for one real message here prevents the automatic
+# post-start probe from producing a misleading red status.
+# ROS/ament setup files legitimately inspect variables that may be unset.
+# Temporarily disable nounset while sourcing them, then restore strict mode.
+set +u
+source /opt/ros/humble/setup.bash >/dev/null 2>&1
+source "$ROS_WORKSPACE/install/setup.bash" >/dev/null 2>&1
+set -u
+
+wait_for_topic() {
+    local label="$1"
+    local topic="$2"
+    local type="$3"
+    shift 3
+    for attempt in 1 2 3 4 5 6; do
+        if timeout 8 ros2 topic echo --once "$@" "$topic" "$type" >/dev/null 2>&1; then
+            echo "  ready: $label"
+            return 0
+        fi
+        echo "  waiting for $label (attempt $attempt/6)"
+    done
+    echo "ERROR: no live $label message after startup"
+    return 1
+}
+
+readiness_failed=0
+wait_for_topic "PX4 telemetry" "/fmu/out/vehicle_local_position" \
+    "px4_msgs/msg/VehicleLocalPosition" \
+    --qos-reliability best_effort --qos-durability transient_local || readiness_failed=1
+wait_for_topic "metric depth" "/depth/clamped" "sensor_msgs/msg/Image" \
+    --qos-reliability best_effort || readiness_failed=1
+wait_for_topic "OctoMap point cloud" "/octomap_point_cloud_centers" \
+    "sensor_msgs/msg/PointCloud2" \
+    --qos-reliability reliable --qos-durability transient_local || readiness_failed=1
+
+if [ "$readiness_failed" -ne 0 ]; then
+    echo "Stack processes started, but one or more live data paths are not ready."
+    exit 2
+fi
+
 echo "== all started. logs: $LOG =="
 ps -eo pid,cmd | grep -E 'px4_sitl|MicroXRCEAgent|ros2 launch' | grep -v grep

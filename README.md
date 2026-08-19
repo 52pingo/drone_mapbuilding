@@ -25,6 +25,11 @@
 playground_equipment 和 pole。详细记录见
 [docs/VALIDATION_2026-08-17.md](docs/VALIDATION_2026-08-17.md)。
 
+2026-08-19 又从打包版 Windows EXE 实际跑通一条 60 m 短航线：UE4/AirSim、
+PX4/ROS2、深度、OctoMap、YOLO、返航、LAND、解除锁定、`MISSION DONE`、Session
+回放和地图导出全部通过。逐步操作与排障记录见
+[docs/EXE_END_TO_END_2026-08-19.md](docs/EXE_END_TO_END_2026-08-19.md)。
+
 ## 系统架构
 
 ```text
@@ -429,6 +434,8 @@ M5 的 Session 恢复、遥测回放、PCD/HTML 和 Windows EXE 验收见
 [`docs/VALIDATION_2026-08-18_M5.md`](docs/VALIDATION_2026-08-18_M5.md)。
 M6 的多环境选择、打包依赖修复和一键配置体检见
 [`docs/VALIDATION_2026-08-19_M6.md`](docs/VALIDATION_2026-08-19_M6.md)。
+打包 EXE 的完整点击顺序、正常等待时间、成功判据和 2026-08-19 实飞验收见
+[`docs/EXE_END_TO_END_2026-08-19.md`](docs/EXE_END_TO_END_2026-08-19.md)。
 
 ### 发布版首次使用（M6）
 
@@ -515,10 +522,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 
 M4 已完成真实 CityPark 深度、约 5 Hz OctoMap、29,651 点和 7 个三维语义标签验收。
 M5 已用 756 秒历史完整飞行恢复 1,524 帧回放，并实际构建、启动 Windows EXE。
-M6 已修复发布包遗漏 AirSim RPC 兼容依赖的问题；真实 UE4 启动、AirSim RPC、RGB/
-深度验证以及 PX4/ROS2/XRCE/QGC 配置体检均已通过。
-新加入的 BT 与全套 Session 自动归档会在下一次 GUI 大环线中随任务结束自动执行；
-现阶段无需为验证回放而重复飞行该耗时航线。
+M6 已修复发布包依赖、外部进程 DLL 隔离、重复 UE4、PX4 假阴性、启动数据等待和
+Session 外部 Python 依赖问题。2026-08-19 已从打包 EXE 实际完成短航线飞行，BT、
+全套 Session 自动归档、173 帧回放以及 PLY/PCD/JSON/PNG 导出均已验证。
 
 ### 后续规划
 

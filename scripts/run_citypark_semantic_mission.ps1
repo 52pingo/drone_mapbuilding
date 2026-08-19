@@ -55,7 +55,9 @@ if (Test-Path -LiteralPath $StopFile) {
 $archiveInitArgs = @(
     $ArchiveScript, 'init',
     '--root', $ResultRoot,
-    '--name', "$EnvironmentName 自主避障任务",
+    # Windows PowerShell 5.1 may decode UTF-8 scripts without BOM as ANSI.
+    # Keep the archived mission name ASCII so it is portable in packaged runs.
+    '--name', "$EnvironmentName autonomous obstacle avoidance mission",
     '--goals', $Goals,
     '--flight-z', $FlightZ.ToString([Globalization.CultureInfo]::InvariantCulture),
     '--max-mission-time', $MaxMissionTime.ToString([Globalization.CultureInfo]::InvariantCulture),
@@ -155,7 +157,8 @@ finally {
     Remove-Item Env:ROS_WORKSPACE -ErrorAction SilentlyContinue
     Remove-Item Env:LOG_DIR -ErrorAction SilentlyContinue
     New-Item -ItemType File -Force -Path $StopFile | Out-Null
-    if (-not $perception.WaitForExit(15000)) {
+    $perceptionTimedOut = -not $perception.WaitForExit(15000)
+    if ($perceptionTimedOut) {
         Stop-Process -Id $perception.Id -Force
     }
     # The timeout overload alone does not reliably populate ExitCode in
@@ -164,7 +167,37 @@ finally {
     $perception.WaitForExit()
     $perception.Refresh()
     $perceptionExitCode = $perception.ExitCode
-    if ($null -eq $perceptionExitCode -or $perceptionExitCode -ne 0) {
+    # Start-Process with redirected streams can still expose a null ExitCode
+    # in Windows PowerShell 5.1 even after both WaitForExit calls.  Accept the
+    # perception worker as cleanly stopped only when it did not time out, its
+    # final summary has finished_at, semantic_objects.json exists, and stderr
+    # is empty.  This preserves crash detection without mislabeling a normal
+    # stop-file shutdown as a failed Session.
+    $gracefulPerceptionOutput = $false
+    $perceptionSummaryPath = Join-Path $SemanticDir 'summary.json'
+    $perceptionObjectsPath = Join-Path $SemanticDir 'semantic_objects.json'
+    if (-not $perceptionTimedOut -and $null -eq $perceptionExitCode -and
+            (Test-Path -LiteralPath $perceptionSummaryPath -PathType Leaf) -and
+            (Test-Path -LiteralPath $perceptionObjectsPath -PathType Leaf)) {
+        try {
+            $perceptionSummary = Get-Content -LiteralPath $perceptionSummaryPath -Raw |
+                ConvertFrom-Json
+            $errorBytes = if (Test-Path -LiteralPath $SemanticErrorLog -PathType Leaf) {
+                (Get-Item -LiteralPath $SemanticErrorLog).Length
+            } else { 0 }
+            $gracefulPerceptionOutput = (
+                -not [string]::IsNullOrWhiteSpace([string]$perceptionSummary.finished_at) -and
+                $errorBytes -eq 0
+            )
+        }
+        catch {
+            $gracefulPerceptionOutput = $false
+        }
+    }
+    if ($perceptionExitCode -eq 0 -or $gracefulPerceptionOutput) {
+        Write-Output "Semantic perception stopped cleanly (exit=$perceptionExitCode)."
+    }
+    else {
         $PerceptionFailure = "Semantic perception failed with exit code $perceptionExitCode; see $SemanticErrorLog"
     }
 

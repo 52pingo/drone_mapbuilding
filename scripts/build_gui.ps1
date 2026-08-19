@@ -1,6 +1,8 @@
 param(
     [string]$Python = '',
-    [switch]$SkipArchive
+    [switch]$SkipArchive,
+    [switch]$NoClean,
+    [string]$DistRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,13 +15,24 @@ if (-not (Test-Path -LiteralPath $Python -PathType Leaf)) {
 }
 
 $Spec = Join-Path $Workspace 'drone_mapbuilding.spec'
+if ([string]::IsNullOrWhiteSpace($DistRoot)) {
+    $DistRoot = Join-Path $Workspace 'dist'
+}
+elseif (-not [System.IO.Path]::IsPathRooted($DistRoot)) {
+    $DistRoot = Join-Path $Workspace $DistRoot
+}
+New-Item -ItemType Directory -Force -Path $DistRoot | Out-Null
 Push-Location $Workspace
 try {
-    & $Python -m PyInstaller --noconfirm --clean $Spec
+    $pyInstallerArgs = @('-m', 'PyInstaller', '--noconfirm')
+    if (-not $NoClean) { $pyInstallerArgs += '--clean' }
+    $pyInstallerArgs += @('--distpath', $DistRoot)
+    $pyInstallerArgs += $Spec
+    & $Python @pyInstallerArgs
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller failed with exit code $LASTEXITCODE"
     }
-    $Target = Join-Path $Workspace 'dist\DroneMapbuilding'
+    $Target = Join-Path $DistRoot 'DroneMapbuilding'
     if (-not (Test-Path -LiteralPath $Target -PathType Container)) {
         throw "Packaged directory was not created: $Target"
     }
@@ -30,6 +43,15 @@ try {
         foreach ($file in Get-ChildItem -LiteralPath $sourceDirectory -File) {
             Copy-Item -LiteralPath $file.FullName -Destination $targetDirectory -Force
         }
+    }
+    # session_archive.py is executed by the separately configured perception
+    # Python, not by the frozen EXE.  Ship its small pure-Python package
+    # surface so that imports work from a portable distribution.
+    $externalPackageTarget = Join-Path $Target 'drone_gui'
+    New-Item -ItemType Directory -Force -Path $externalPackageTarget | Out-Null
+    foreach ($name in @('__init__.py', 'session_archive.py', 'report_export.py')) {
+        Copy-Item -LiteralPath (Join-Path $Workspace "drone_gui\$name") `
+            -Destination $externalPackageTarget -Force
     }
     $rosSource = Join-Path $Workspace 'ros2_ws'
     Copy-Item -LiteralPath $rosSource -Destination (Join-Path $Target 'ros2_ws') -Recurse -Force
@@ -60,6 +82,8 @@ try {
         'scripts\run_citypark_loop_inner.sh',
         'scripts\semantic_perception.py',
         'scripts\session_archive.py',
+        'drone_gui\session_archive.py',
+        'drone_gui\report_export.py',
         'config\gui_config.example.json',
         '.tools\airsim_rpc\msgpackrpc\__init__.py',
         'ros2_ws\src\hw_insight\package.xml'

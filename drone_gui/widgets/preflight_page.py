@@ -39,6 +39,7 @@ class PreflightPage(QWidget):
         super().__init__(parent)
         self.config = config
         self._checks = []
+        self._local_checks = []
         self._runtime_payload: dict | None = None
         self._probe_completed = False
 
@@ -93,6 +94,7 @@ class PreflightPage(QWidget):
             item for item in run_local_preflight(self.config)
             if item.name != "ROS2 工作区"
         ]
+        self._local_checks = local_checks
         runtime_checks = []
         for key, name, required in self.RUNTIME_COMPONENTS:
             if self._runtime_payload is None:
@@ -123,15 +125,23 @@ class PreflightPage(QWidget):
             self.table.setItem(row, 2, QTableWidgetItem(check.detail))
             passed += check.status == "pass"
         required_ok = self.required_ready
+        local_blocked = has_required_failures(self._local_checks)
+        if required_ok:
+            summary_text = "可以进入任务流程"
+            summary_state = "pass"
+        elif local_blocked:
+            summary_text = "存在阻止启动的本地配置问题"
+            summary_state = "fail"
+        elif not self._probe_completed:
+            summary_text = "请先完成 WSL 动态检查"
+            summary_state = "warning"
+        else:
+            summary_text = "运行栈尚未就绪，请按 1 → 2 启动并等待自动复检"
+            summary_state = "warning"
         self.summary.setText(
-            f"{passed}/{len(self._checks)} 项通过 · "
-            + (
-                "可以进入启动流程" if required_ok else
-                "请先完成 WSL 动态检查" if not self._probe_completed else
-                "存在阻止启动的问题"
-            )
+            f"{passed}/{len(self._checks)} 项通过 · {summary_text}"
         )
-        self.summary.setProperty("state", "pass" if required_ok else "fail")
+        self.summary.setProperty("state", summary_state)
         self.summary.style().unpolish(self.summary)
         self.summary.style().polish(self.summary)
 

@@ -15,7 +15,11 @@ mission_service=false
 if [ -r "$ROS_WORKSPACE/install/setup.bash" ]; then
     workspace=true
 fi
-if pgrep -f "px4 px4_sitl\|px4_sitl_default" >/dev/null 2>&1; then
+# PX4 v1.15 SITL ends up as .../build/px4_sitl_default/bin/px4.  The old
+# expression expected the words "px4 px4_sitl" next to one another and
+# therefore reported a false negative even while PX4 was Ready for takeoff.
+if pgrep -x "px4" >/dev/null 2>&1 || \
+        pgrep -f "/build/px4_sitl_default/bin/px4([[:space:]]|$)" >/dev/null 2>&1; then
     px4=true
 fi
 if pgrep -f "MicroXRCEAgent" >/dev/null 2>&1; then
@@ -30,18 +34,18 @@ if [ "$workspace" = true ]; then
     services="$(timeout 6 ros2 service list 2>/dev/null)"
     if printf '%s\n' "$nodes" | grep -q "airsim_node"; then airsim=true; fi
     if printf '%s\n' "$topics" | grep -Fxq "/depth/clamped" && \
-            timeout 4 ros2 topic echo --once --qos-reliability best_effort \
+            timeout 8 ros2 topic echo --once --qos-reliability best_effort \
             /depth/clamped sensor_msgs/msg/Image >/dev/null 2>&1; then
         depth=true
     fi
     if printf '%s\n' "$topics" | grep -Fxq "/octomap_point_cloud_centers" && \
-            timeout 4 ros2 topic echo --once --qos-reliability reliable \
+            timeout 8 ros2 topic echo --once --qos-reliability reliable \
             --qos-durability transient_local /octomap_point_cloud_centers \
             sensor_msgs/msg/PointCloud2 >/dev/null 2>&1; then
         octomap=true
     fi
     if printf '%s\n' "$topics" | grep -Fxq "/fmu/out/vehicle_local_position" && \
-            timeout 4 ros2 topic echo --once --qos-reliability best_effort \
+            timeout 8 ros2 topic echo --once --qos-reliability best_effort \
             --qos-durability transient_local /fmu/out/vehicle_local_position \
             px4_msgs/msg/VehicleLocalPosition >/dev/null 2>&1; then
         telemetry=true

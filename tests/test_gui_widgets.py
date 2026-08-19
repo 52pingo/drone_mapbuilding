@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import sys
 
 import pytest
@@ -8,7 +9,7 @@ pytest.importorskip("PySide6")
 from drone_gui.main_window import MainWindow
 from drone_gui.commands import CommandSpec
 from drone_gui.models import MissionPlan, RuntimeConfig, Waypoint
-from drone_gui.runtime import RuntimeController
+from drone_gui.runtime import RuntimeController, _sanitize_search_path
 from drone_gui.widgets.mission_page import MissionPage
 from drone_gui.widgets.preflight_page import PreflightPage
 from drone_gui.widgets.live_page import LivePage
@@ -115,6 +116,13 @@ def test_runtime_controller_streams_process_output(qtbot, tmp_path):
     assert any("qprocess-ready" in text for text in output)
 
 
+def test_external_process_path_excludes_pyinstaller_bundle(tmp_path):
+    bundle = tmp_path / "DroneMapbuilding" / "_internal"
+    system = tmp_path / "Windows" / "System32"
+    value = os.pathsep.join((str(bundle), str(bundle / "PySide6"), str(system)))
+    assert _sanitize_search_path(value, bundle) == str(system)
+
+
 def test_runtime_controller_reassembles_split_lines(qtbot, tmp_path):
     controller = RuntimeController()
     output = []
@@ -152,6 +160,7 @@ def test_preflight_requires_successful_runtime_probe(qtbot, tmp_path):
     page = PreflightPage(config)
     qtbot.addWidget(page)
     assert not page.required_ready
+    assert "本地配置问题" in page.summary.text()
     page.apply_runtime_probe({key: True for key, _name, _required in page.RUNTIME_COMPONENTS})
     # Runtime is healthy, but deliberately missing local fixture files still block start.
     assert not page.required_ready
