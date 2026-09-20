@@ -1,22 +1,12 @@
 # Qt 无人机避障建图工作站：功能与实施方案
 
-> 实施状态（2026-08-19）：M1–M6 已实现，完成 PySide6 主窗口、本地/WSL 动态
-> 自检、NED 航点编辑、结构化飞行遥测、Hold/Resume/Safe Land，以及 AirSim RGB、
-> YOLO 框、类别证据和首次发现截图的实时共享文件协议。已用 `best.pt` 做真实图片
-> 端到端验证；M4 已加入 OctoMap 原子快照、三维点云/轨迹、语义反投影与稳定标签、
-> PLY/PCD/JSON/PNG/HTML 导出、BT 任务导出、Session 清单、遥测时间轴、旧任务恢复
-> 和 PyInstaller 发布目录。M4 真实连续点云、M5 Windows EXE，以及 M6 多 UE4
-> 环境选择与工作流一键配置均已完成现场验收。
+> 状态（2026-08-19）：M1–M6 已实现。PySide6 主窗口、本地/WSL 动态自检、NED 航点编辑、结构化飞行遥测、Hold/Resume/Safe Land，以及 AirSim RGB、YOLO 框、类别证据和首次发现截图的实时共享文件协议都跑通了。已用 `best.pt` 做过真实图片端到端验证。M4 加了 OctoMap 原子快照、三维点云/轨迹、语义反投影与稳定标签、PLY/PCD/JSON/PNG/HTML 导出、BT 任务导出、Session 清单、遥测时间轴、旧任务恢复和 PyInstaller 发布目录。M4 真实连续点云、M5 Windows EXE、M6 多 UE4 环境选择与工作流一键配置，都过了现场验收。
 
 ## 1. 产品目标
 
-把现有 PowerShell、WSL/ROS2、AirSim、PX4、VFH、OctoMap 和 YOLO
-链路封装成一个 Windows 桌面工作站。操作者可以在同一软件内完成环境自检、
-航点规划、任务执行、实时监控、视觉目标查看、三维语义地图导出和任务回放。
+目标是把现有那套 PowerShell、WSL/ROS2、AirSim、PX4、VFH、OctoMap、YOLO 的链路塞进一个 Windows 桌面工作站。操作者在一个软件里完成环境自检、航点规划、任务执行、实时监控、视觉目标查看、三维语义地图导出和任务回放。
 
-首版建议采用 **PySide6**。当前算法、训练和 AirSim 工具已经是 Python，
-PySide6 能直接复用数据模型与测试，开发成本低于 C++ Qt；飞控与建图仍运行在
-WSL/ROS2，GUI 不把 ROS2 和 CUDA 推理阻塞在界面线程中。
+首版选 **PySide6**，不是 C++ Qt。理由很实际：算法、训练、AirSim 工具本来就是 Python，复用数据模型和测试的成本远低于 C++ Qt。飞控和建图继续留在 WSL/ROS2，GUI 不把 ROS2 和 CUDA 推理堵在界面线程里。
 
 ## 2. 建议总体架构
 
@@ -36,29 +26,24 @@ WSL Backend（ROS2 节点或独立服务）
 PX4 SITL ⇄ AirSim/UE4 ⇄ 深度/RGB ⇄ VFH/OctoMap/YOLO
 ```
 
-关键决定：GUI 通过一个稳定的后端协议访问 ROS2，不在 Windows GUI 进程中
-直接加载 `rclpy`。这样 WSL 断开、ROS 图重启或 YOLO 推理异常时，界面仍能响应，
-并能明确显示哪个组件失效。
+关键决定：GUI 通过一个稳定的后端协议访问 ROS2，不在 Windows GUI 进程里直接加载 `rclpy`。WSL 断了、ROS 图重启了、YOLO 推理炸了，界面还能响应，还能告诉你哪个组件挂了。代价是协议层得自己维护，好处是调试和离线重开都方便。
 
 ## 3. 界面信息架构
 
 ### 3.1 主工作区
 
 - 顶部：项目/场景/模型选择，连接状态，启动仿真、启动堆栈、开始任务。
-- 左侧“任务规划”：本地 NED 坐标底图、点选航点、拖动、排序、删除；设置高度、
-  巡航速度、到达半径和返航点；显示总距离、预计耗时、越界和危险航段。
+- 左侧「任务规划」：本地 NED 坐标底图、点选航点、拖动、排序、删除；设置高度、巡航速度、到达半径和返航点；显示总距离、预计耗时、越界和危险航段。
 - 中央可切换视图：
   - 实时 RGB 视频，叠加类别、置信度、目标深度、跟踪 ID；
   - 2D 实时轨迹和 VFH 当前选向；
   - 3D 点云/OctoMap，叠加语义目标标签和无人机位姿。
-- 右侧“感知与任务”：当前阶段、航点进度、PX4 armed/nav 状态、最小障碍距离、
-  检出类别列表、类别筛选和首次发现缩略图。
+- 右侧「感知与任务」：当前阶段、航点进度、PX4 armed/nav 状态、最小障碍距离、检出类别列表、类别筛选和首次发现缩略图。
 - 底部：分级日志、告警、任务计时，以及 Hold、继续、返航/降落按钮。
 
 ### 3.2 独立页面
 
-- 启动与自检：UE4 RPC、深度统计、PX4、DDS Agent、ROS 话题、OctoMap、GPU、
-  权重哈希逐项绿/黄/红。
+- 启动与自检：UE4 RPC、深度统计、PX4、DDS Agent、ROS 话题、OctoMap、GPU、权重哈希逐项绿/黄/红。
 - 模型与感知：选择权重，调整置信度/IoU，查看类别表和离线图片测试结果。
 - 成果中心：按任务和类别浏览带框图片，导出地图、报告、日志，加载历史 Session。
 - 设置：路径配置、WSL 发行版/用户、ROS 工作区、UE4 项目、AirSim 配置和安全阈值。
@@ -67,40 +52,31 @@ PX4 SITL ⇄ AirSim/UE4 ⇄ 深度/RGB ⇄ VFH/OctoMap/YOLO
 
 ### 4.1 任务服务化
 
-把当前脚本编排整理成 `MissionService`，对 GUI 提供明确命令：
-`preflight/start/hold/resume/land/abort/status`。每个命令包含任务 ID 和幂等语义，
-避免双击“开始”启动两个控制器。只有检测到稳定着陆后才允许解除锁定并宣布
-`MISSION DONE`；空中禁止普通强制 disarm。
+把现在脚本编排整理成 `MissionService`，对 GUI 给明确命令：`preflight/start/hold/resume/land/abort/status`。每个命令带任务 ID 和幂等语义——双击「开始」不能起两个控制器。只有检测到稳定着陆才允许解除锁定并宣布 `MISSION DONE`；空中禁止普通强制 disarm。
 
 ### 4.2 实时地图桥接
 
-M4 已订阅 `/octomap_point_cloud_centers`，使用可靠、Transient Local QoS 接收 OctoMap
-占用点中心；后端先执行 `world_enu` 轴变换，再从 TF 读取 `world_ned -> PX4` 的出生点
-平移并转换为真正的 `px4_local_ned`。随后过滤非有限值，确定性限制到 80,000 点，并以
-NPY 先写、JSON 后提交的方式每秒发布快照。GUI 每 500 ms 非阻塞轮询，保留断流和无数据
-状态。首版使用 `pyqtgraph.opengl.GLViewWidget`；点数和交互需求提高后再增加体素/范围
-裁剪或切换 PyVista/VTK。
+M4 已订阅 `/octomap_point_cloud_centers`，用可靠、Transient Local QoS 收 OctoMap 占用点中心；后端先做 `world_enu` 轴变换，再从 TF 读 `world_ned -> PX4` 的出生点平移，转成真正的 `px4_local_ned`。然后过滤非有限值，确定性限到 80,000 点，NPY 先写、JSON 后提交，每秒发一次快照。GUI 每 500 ms 非阻塞轮询，断流和无数据状态都保留。
+
+首版用 `pyqtgraph.opengl.GLViewWidget`。没上 PyVista/VTK，是因为前者上手快、依赖轻，能先把数据链跑通；点数和交互需求上来了再加体素/范围裁剪，或者换 PyVista/VTK。这条升级路径留着，但不阻塞现在。
 
 ### 4.3 三维语义融合
 
-M4 首版已经打通以下数据链：
+M4 首版已经把这条数据链打通了：
 
 1. 取检测框中心的有效 `DepthPerspective`，结合相机水平 FOV 构造投影射线。
-2. 使用 AirSim 同帧返回的相机位置和四元数转换到 PX4 本地 NED。
-3. 按类别与 4 m 空间距离合并重复观察，生成稳定对象 ID 和观测次数。
-4. 为每个语义对象保存 `label/max_confidence/position_ned/id/observations`，并明确标记
-   当前中心点估计为近似值。
-5. 渲染时用类别颜色、三维锚点和随相机移动的 Qt 标签叠加到占用点云。
+2. 用 AirSim 同帧返回的相机位置和四元数转 PX4 本地 NED。
+3. 按类别和 4 m 空间距离合并重复观察，生成稳定对象 ID 和观测次数。
+4. 每个语义对象存 `label/max_confidence/position_ned/id/observations`，并明确标记当前中心点估计是近似值。
+5. 渲染时用类别颜色、三维锚点和随相机移动的 Qt 标签叠到占用点云上。
 
-后续精度升级项是框内多像素鲁棒质心、三维包围盒和更严格的数据关联；它们不阻塞
-当前 M4 演示和结果导出。
+后续精度升级项是框内多像素鲁棒质心、三维包围盒和更严格的数据关联。它们不阻塞当前 M4 演示和结果导出。
 
-安全避障仍使用深度/VFH；YOLO 语义只用于解释、筛选和成果标注，不能替代几何
-避障。这样即使视觉漏检，飞行安全链路仍然工作。
+安全避障还是走深度/VFH。YOLO 语义只用来解释、筛选和成果标注，不能替代几何避障——视觉漏检了，飞行安全链路照样工作。
 
 ### 4.4 Session 与导出
 
-每次任务采用不可覆盖的 Session 目录：
+每次任务用不可覆盖的 Session 目录：
 
 ```text
 sessions/<timestamp>_<mission>/
@@ -116,18 +92,16 @@ sessions/<timestamp>_<mission>/
   report.html
 ```
 
-导出至少支持：OctoMap `.bt/.ot`、点云 `.pcd/.ply`、语义对象 `.json`、
-俯视图/三维截图 `.png`、任务报告 `.html`。导出前写入坐标系、单位、起飞原点、
-模型哈希和参数，保证成果可复现。
+导出至少支持：OctoMap `.bt/.ot`、点云 `.pcd/.ply`、语义对象 `.json`、俯视图/三维截图 `.png`、任务报告 `.html`。导出前把坐标系、单位、起飞原点、模型哈希和参数写进去，保证成果可复现。
 
 ## 5. 安全与交互约束
 
-- “开始任务”前必须通过深度有效性、遥测、GPS/本地位置、模型和输出目录检查。
-- `Land` 始终可见；紧急停止采用长按或二次确认，且与普通 abort 分开。
-- UI 所有长任务使用 `QProcess/QThreadPool` 或异步 I/O，主线程只绘制。
-- 后端心跳超时后界面进入失联态，不把“未知”显示为“已停止”。
+- 「开始任务」前必须过深度有效性、遥测、GPS/本地位置、模型和输出目录检查。
+- `Land` 始终可见；紧急停止用长按或二次确认，跟普通 abort 分开。
+- UI 所有长任务走 `QProcess/QThreadPool` 或异步 I/O，主线程只负责画。
+- 后端心跳超时后界面进失联态，不把「未知」显示成「已停止」。
 - 航点规划提供高度、最大距离、地理围栏、返航点和预计电量/时长校验。
-- 任务状态和 PX4 armed 状态以遥测为准，不能仅根据子进程退出码推断。
+- 任务状态和 PX4 armed 状态以遥测为准，不能只看子进程退出码。
 
 ## 6. 技术选型
 
@@ -141,6 +115,8 @@ sessions/<timestamp>_<mission>/
 | 配置 | Pydantic + YAML/JSON | 路径、场景、任务和安全参数可校验 |
 | 打包 | PyInstaller | 首版生成 Windows 可执行目录 |
 | 测试 | pytest + pytest-qt | 覆盖状态机、协议、导出和界面响应 |
+
+2D 底图没用在线地图，是因为当前仿真是本地 NED 坐标，套在线地图还得做投影换算，反而绕。GUI↔WSL 没用 WebSocket 而用原子 JSON，是因为前者要维护长连接和重连逻辑，后者进程崩了也能读、能离线重开、好调试。这些选择都不是终态，等链路稳定、实时性要求上来了再换。
 
 ## 7. 实施阶段与验收点
 
@@ -162,39 +138,30 @@ sessions/<timestamp>_<mission>/
 
 ### M3：实时视觉与类别成果（4–6 天）
 
-状态：实时协议、Qt 画面、类别统计、首次证据和断流提示已完成；等待完整仿真持续流
-与飞行验收。
+状态：实时协议、Qt 画面、类别统计、首次证据和断流提示已完成；等待完整仿真持续流与飞行验收。
 
 - RGB 流、YOLO 框、深度、类别筛选、首次发现和类别图库。
 - 验收：视频目标 5–10 FPS，界面无阻塞；结果目录与界面计数一致。
 
 ### M4：实时 3D 语义地图（7–10 天）
 
-状态：已完成。真实 CityPark 验收包含约 5 Hz 点云、29,651 个占据点、TF 出生点
-校准、7 个三维语义标签和 PLY/PCD/JSON/PNG 导出。
+状态：已完成。真实 CityPark 验收包含约 5 Hz 点云、29,651 个占据点、TF 出生点校准、7 个三维语义标签和 PLY/PCD/JSON/PNG 导出。
 
 - 点云增量显示、无人机位姿、语义反投影/聚类、3D 标签。
 - 验收：关闭/开启类别可筛选点云标签；同一静态物体不会随每帧无限复制。
 
 ### M5：导出、回放与交付（4–6 天）
 
-- 状态：已完成。任务自动写入 manifest/mission、模型哈希、遥测 JSONL/CSV、PCD/PLY、
-  BT、语义 JSON、PNG 和离线 HTML；成果中心提供时间轴回放与后台归档恢复；已构建并
-  运行 PyInstaller Windows 发布目录。新任务 BT 自动落盘等待下一次大环线随飞验收。
+- 状态：已完成。任务自动写入 manifest/mission、模型哈希、遥测 JSONL/CSV、PCD/PLY、BT、语义 JSON、PNG 和离线 HTML；成果中心提供时间轴回放与后台归档恢复；已构建并运行 PyInstaller Windows 发布目录。新任务 BT 自动落盘等待下一次大环线随飞验收。
 - PCD/PLY/BT/JSON/PNG/HTML 导出、Session 回放、异常恢复、打包。
 - 验收：导出的 Session 可在无 UE4/ROS 环境中重新打开并查看。
 
 ### M6：多仿真环境与环境配置（已完成）
 
-- 新增独立“环境配置”页，可选择 UE4 Editor + `.uproject` 或已打包仿真 `.exe`；
-  地图、AirSim settings、载具/相机、视觉 Python、权重、QGC 和 WSL 路径均可编辑。
+- 新增独立「环境配置」页，可选 UE4 Editor + `.uproject` 或已打包仿真 `.exe`；地图、AirSim settings、载具/相机、视觉 Python、权重、QGC 和 WSL 路径均可编辑。
 - GUI 配置原子保存；切换后启动命令、自检、任务结果命名和语义感知立即使用当前环境。
 - UE4 窗口成功与 AirSim RGB/深度验证分开反馈，打包目录携带 4.6 MB RPC 兼容依赖。
-- 一键体检/修复脚本按官方兼容组合配置 ROS2 Humble、PX4 v1.15.2、Micro
-  XRCE-DDS 2.4.2、AirSim v1.8.1 ROS2/PythonClient 与 QGroundControl。
-- 验收：真实 CityPark 启动得到有效公制深度；本机所有配置组件体检通过；发布 EXE
-  可直接打开新增页面，且不依赖源码目录中的 `.tools`。
+- 一键体检/修复脚本按官方兼容组合配置 ROS2 Humble、PX4 v1.15.2、Micro XRCE-DDS 2.4.2、AirSim v1.8.1 ROS2/PythonClient 与 QGroundControl。
+- 验收：真实 CityPark 启动得到有效公制深度；本机所有配置组件体检通过；发布 EXE 可直接打开新增页面，且不依赖源码目录中的 `.tools`。
 
-单人开发预计 4–6 周得到可演示且可持续迭代的首版。建议优先完成 M1–M3，
-先交付“能规划、能飞、能看框、能安全结束”的版本，再加入三维语义融合；
-M4 是技术风险和价值最高的部分，应单独做数据正确性验收。
+单人开发预计 4–6 周得到可演示且可持续迭代的首版。建议优先完成 M1–M3，先交付「能规划、能飞、能看框、能安全结束」的版本，再加入三维语义融合；M4 是技术风险和价值最高的部分，应单独做数据正确性验收。

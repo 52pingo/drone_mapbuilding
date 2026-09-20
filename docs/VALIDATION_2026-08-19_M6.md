@@ -2,31 +2,32 @@
 
 ## 修复结论
 
-旧发布包的 UE4 窗口实际能够创建，但随后使用视觉 Python 执行 CityPark 深度检查时，
-打包目录没有携带 `.tools/airsim_rpc`，该 Python 又未全局安装 `msgpackrpc`，所以脚本
-返回非零，GUI 将其笼统显示为“UE4 启动失败”。
+旧发布包的 UE4 窗口其实能创建，但随后用视觉 Python 跑 CityPark 深度检查时，打包
+目录里没带 `.tools/airsim_rpc`，那个 Python 又没全局装 `msgpackrpc`，脚本返回
+非零，GUI 就笼统报成了“UE4 启动失败”。
 
-M6 将窗口和 AirSim 状态拆开，并把 4.6 MB 的兼容 RPC 依赖随发布目录复制。现场使用
-修复后的启动链得到：
+M6 把窗口和 AirSim 状态拆开，并把 4.6 MB 的兼容 RPC 依赖一起复制进发布目录。
+用修复后的启动链现场跑，得到：
 
 - UE4 Editor 进程和主窗口正常创建；
 - AirSim RPC `ping` 成功；
-- CityPark `PostProcessVolumeMAIN` 在运行时移除；
+- CityPark `PostProcessVolumeMAIN` 运行时移除；
 - `CameraDepth`：min `1.756 m`、median `61.906 m`、max `16640.000 m`；
 - 最终协议为 `window_ready=true, airsim_ready=true`。
 
-最终发布目录再次执行同一启动链也通过，深度统计为 min `1.775 m`、median
-`61.906 m`、max `16640.000 m`，证明修复不依赖源码目录中的兼容包。
+最终发布目录再跑一遍同一启动链也通过，深度统计是 min `1.775 m`、median
+`61.906 m`、max `16640.000 m`，说明修复不依赖源码目录里的兼容包。
 
 ## 新增能力
 
-- 环境页支持 UE4 Editor 工程和已打包仿真程序两种启动方式。
-- 操作者可选择任意本地 `.uproject`、地图、AirSim settings、载具和相机；航线不再
-  绑定 CityPark 结果命名或环境名称。
-- 通用环境会验证 AirSim RPC、Scene RGB 和 `DepthPerspective`；CityPark 保留专用
-  深度修复逻辑；也可显式选择只检查窗口。
-- 一键体检/配置覆盖 Windows Python/AirSim/QGC 与 WSL ROS2/PX4/XRCE/工作区。
-- AirSim settings 覆盖前创建带时间戳的备份；WSL 安装需要重启时会停止并明确提示。
+环境页现在支持 UE4 Editor 工程和已打包仿真程序两种启动方式。
+
+操作者可以选任意本地 `.uproject`、地图、AirSim settings、载具和相机；航线不再
+绑定 CityPark 结果命名或环境名称。通用环境会验证 AirSim RPC、Scene RGB 和
+`DepthPerspective`；CityPark 保留专用深度修复逻辑；也可以显式选择只检查窗口。
+
+一键体检/配置覆盖 Windows Python/AirSim/QGC 与 WSL ROS2/PX4/XRCE/工作区。
+AirSim settings 覆盖前创建带时间戳的备份；WSL 安装需要重启时会停下来明确提示。
 
 ## 本机体检结果
 
@@ -45,7 +46,7 @@ M6 将窗口和 AirSim 状态拆开，并把 4.6 MB 的兼容 RPC 依赖随发�
 - Windows：`78 passed, 2 skipped`。
 - PowerShell 启动、配置、任务和打包脚本均通过 AST 语法检查。
 - WSL shell 脚本通过 `bash -n`。
-- Qt 新环境页已做真实渲染截图和可访问名称检查。
+- Qt 新环境页做了真实渲染截图和可访问名称检查。
 - 最终发布目录必须同时包含 `scripts`、`ros2_ws` 和 `.tools/airsim_rpc`，EXE 不能
   脱离整个目录单独复制运行。
 - `DroneMapbuilding-win64.zip` 大小 `67,537,948` bytes，SHA-256：
