@@ -1,0 +1,4 @@
+# 事后分析脚本用（scripts/plot_flight.py、scripts/render_map.py）。
+# render_map.py 还依赖 rclpy 与 sensor_msgs_py，那部分走 ROS2 环境，不在这里装。
+matplotlib>=3.7,<4
+numpy>=1.24,<3
