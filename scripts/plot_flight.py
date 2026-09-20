@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize avoidance actions and plot the completed QGC flight."""
+"""Plot the finished QGC flight, colored by what the avoidance logic did."""
 
 import collections
 import json
@@ -10,23 +10,18 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
-LOG_PATH = (
-    sys.argv[1] if len(sys.argv) > 1 else "/home/hw/logs/avoid_flight.log"
-)
+LOG_PATH = sys.argv[1] if len(sys.argv) > 1 else "/home/hw/logs/avoid_flight.log"
 OUTPUT = (
-    sys.argv[2]
-    if len(sys.argv) > 2
-    else "/home/hw/logs/flight_trajectory_qgc.png"
+    sys.argv[2] if len(sys.argv) > 2 else "/home/hw/logs/flight_trajectory_qgc.png"
 )
 ROUTE_SOURCE = (
-    sys.argv[3]
-    if len(sys.argv) > 3
-    else "/home/hw/logs/qgc_mission_route.json"
+    sys.argv[3] if len(sys.argv) > 3 else "/home/hw/logs/qgc_mission_route.json"
 )
 ENVIRONMENT = sys.argv[4] if len(sys.argv) > 4 else "AirSim"
 
 
 def load_waypoints(source):
+    # 要么是 QGC 导出的 json，要么是 "n,e;n,e;..." 这种手写串
     if source.lower().endswith(".json"):
         with open(source, encoding="utf-8") as route_file:
             route = json.load(route_file)["route"]
@@ -38,6 +33,8 @@ def load_waypoints(source):
 
 
 WAYPOINTS = load_waypoints(ROUTE_SOURCE)
+
+# 日志每行: t action x y z vx vy vz decision ...，只留前 9 列
 ROWS = []
 with open(LOG_PATH, encoding="utf-8") as flight_log:
     for line in flight_log:
@@ -48,15 +45,15 @@ with open(LOG_PATH, encoding="utf-8") as flight_log:
             continue
         ROWS.append(
             (
-                float(parts[0]),
-                parts[1],
-                float(parts[2]),
-                float(parts[3]),
-                float(parts[4]),
-                float(parts[5]),
-                float(parts[6]),
-                float(parts[7]),
-                parts[8],
+                float(parts[0]),   # t
+                parts[1],          # action
+                float(parts[2]),   # x
+                float(parts[3]),   # y
+                float(parts[4]),   # z
+                float(parts[5]),   # vx
+                float(parts[6]),   # vy
+                float(parts[7]),   # vz
+                parts[8],          # decision
             )
         )
 
@@ -71,22 +68,17 @@ for action, count in collections.Counter(row[8] for row in NAVIGATION).most_comm
 
 start_time = NAVIGATION[0][0]
 print("--- key events ---")
-print(
-    "  start  : t=%.0fs pos=(%.1f,%.1f)"
-    % (0.0, NAVIGATION[0][2], NAVIGATION[0][3])
-)
-print(
-    "  route  : "
-    + " -> ".join("(%g,%g)" % waypoint for waypoint in WAYPOINTS)
-)
+print("  start  : t=%.0fs pos=(%.1f,%.1f)" % (0.0, NAVIGATION[0][2], NAVIGATION[0][3]))
+print("  route  : " + " -> ".join("(%g,%g)" % wp for wp in WAYPOINTS))
+
+# 对每个航点找时间上最近的经过点；搜索指针只往前走，避免来回匹配
 search_start = 0
 mission_rows = ROWS[ROWS.index(NAVIGATION[0]):]
 for index, waypoint in enumerate(WAYPOINTS):
     remaining = mission_rows[search_start:]
     closest = min(
         remaining,
-        key=lambda row: (row[2] - waypoint[0]) ** 2
-        + (row[3] - waypoint[1]) ** 2,
+        key=lambda row: (row[2] - waypoint[0]) ** 2 + (row[3] - waypoint[1]) ** 2,
     )
     search_start += remaining.index(closest) + 1
     distance = (
@@ -114,6 +106,7 @@ print(
 )
 print("  elapsed: %.0fs" % (mission_rows[-1][0] - start_time))
 
+# 每种 action 一个颜色，图例里给个能看懂的名字
 COLORS = {
     "go": ("#2e7d32", "forward"),
     "slow": ("#ffb300", "slow"),
@@ -137,6 +130,8 @@ axes.plot(
     linewidth=1.2,
     zorder=1,
 )
+
+# 每个 action 只在图例里出现一次，散点照常全画
 seen = set()
 for row in NAVIGATION:
     action = row[8]

@@ -1,4 +1,4 @@
-"""Simulation-environment settings panel."""
+"""仿真环境配置面板。"""
 
 from PySide6.QtWidgets import QComboBox, QFormLayout, QLineEdit, QWidget
 
@@ -45,6 +45,7 @@ class SimulationSettings(QWidget):
         self.load(config)
 
     def _vehicle_camera_row(self):
+        # 载具和相机挤一行，用嵌套 QFormLayout 保持标签对齐
         row = QWidget()
         layout = QFormLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)

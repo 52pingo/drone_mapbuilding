@@ -1,4 +1,4 @@
-"""Pure configuration and mission models shared by the Qt presentation layer."""
+"""Config and mission dataclasses. No Qt imports here."""
 
 from __future__ import annotations
 
@@ -91,9 +91,7 @@ class MissionPlan:
         return issues
 
     def to_dict(self) -> dict:
-        payload = asdict(self)
-        payload["waypoints"] = [asdict(point) for point in self.waypoints]
-        return payload
+        return asdict(self)
 
     @classmethod
     def from_dict(cls, payload: dict) -> "MissionPlan":

@@ -1,4 +1,4 @@
-"""Non-blocking reader for WSL OctoMap NPY/JSON snapshots."""
+"""Reads OctoMap snapshots from WSL without blocking the UI."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ class MapFeed(QObject):
         self._last_sequence = -1
         self._started_at = 0.0
         self._last_received = 0.0
-        self._last_state = ""
+        self._last_state: tuple[str, str] | None = None
         self._offline = False
 
     def start(self, session: dict) -> bool:
@@ -35,7 +35,7 @@ class MapFeed(QObject):
         self._last_sequence = -1
         self._started_at = time.monotonic()
         self._last_received = 0.0
-        self._last_state = ""
+        self._last_state = None
         self._offline = bool(session.get("offline", False))
         if self._offline and not (self.directory / "latest.json").is_file():
             self._emit_state("warning", "该 Session 没有三维 OctoMap 快照")
@@ -49,10 +49,9 @@ class MapFeed(QObject):
         self._emit_state("ready", message)
 
     def _emit_state(self, state: str, message: str) -> None:
-        marker = f"{state}:{message}"
-        if marker == self._last_state:
+        if (state, message) == self._last_state:
             return
-        self._last_state = marker
+        self._last_state = (state, message)
         self.state_changed.emit(state, message)
 
     def _poll(self) -> None:
@@ -66,7 +65,7 @@ class MapFeed(QObject):
         try:
             metadata = json.loads(latest.read_text(encoding="utf-8"))
             sequence = int(metadata["sequence"])
-        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        except (OSError, ValueError, KeyError, TypeError):
             self._emit_state("warning", "地图状态文件暂不可读")
             return
         if sequence == self._last_sequence:

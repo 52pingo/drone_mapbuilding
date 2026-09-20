@@ -1,4 +1,4 @@
-"""Fast local preflight checks used before starting external processes."""
+"""启动外部进程前的本地快速检查。"""
 
 from __future__ import annotations
 
@@ -49,6 +49,7 @@ def run_local_preflight(config: RuntimeConfig) -> List[CheckResult]:
             config.repo_root / "scripts" / "run_citypark_semantic_mission.ps1",
         ),
     ]
+    # QGC 是可选的：自主任务不需要它，只是没法手动开地面站看。
     qgc_ready = config.qgc_executable is not None and config.qgc_executable.is_file()
     checks.append(CheckResult(
         "QGroundControl",
@@ -58,6 +59,7 @@ def run_local_preflight(config: RuntimeConfig) -> List[CheckResult]:
     ))
     wsl = shutil.which("wsl.exe") or shutil.which("wsl")
     checks.append(CheckResult("WSL", "pass" if wsl else "fail", wsl or "未找到 wsl.exe"))
+    # 结果目录本身可能还没建，退一步看父目录能不能写。
     parent = config.results_dir if config.results_dir.exists() else config.results_dir.parent
     writable = parent.exists() and parent.is_dir()
     checks.append(CheckResult(
@@ -65,6 +67,7 @@ def run_local_preflight(config: RuntimeConfig) -> List[CheckResult]:
         "pass" if writable else "fail",
         str(config.results_dir) if writable else f"父目录不可用：{parent}",
     ))
+    # ROS2 工作区在 WSL 里，本地看不到，交给后面的 probe 脚本判断。
     checks.append(CheckResult(
         "ROS2 工作区",
         "warning",

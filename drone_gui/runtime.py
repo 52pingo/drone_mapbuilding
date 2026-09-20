@@ -1,4 +1,4 @@
-"""Non-blocking external process orchestration based on QProcess."""
+"""QProcess 包装：跑外部进程，不阻塞 UI。"""
 
 from __future__ import annotations
 
@@ -14,7 +14,8 @@ from drone_gui.commands import CommandSpec
 
 
 def _sanitize_search_path(value: str, bundle_root: Path) -> str:
-    """Remove PyInstaller bundle directories before launching system tools."""
+    # PyInstaller 会把 sys._MEIPASS 塞进 PATH，子进程继承后可能从 GUI 的
+    # 打包目录里加载 DLL。把 bundle 目录从 PATH 里剔掉。
     root = bundle_root.resolve()
     clean = []
     for item in value.split(os.pathsep):
@@ -45,7 +46,7 @@ def _external_process_environment() -> QProcessEnvironment:
 
 
 def _set_frozen_dll_directory(path: str | None) -> None:
-    """Control the Windows loader path inherited by external child processes."""
+    # 只在 frozen 的 Windows 上有效，其他平台直接 no-op。
     if sys.platform != "win32" or not getattr(sys, "frozen", False):
         return
     import ctypes
@@ -95,12 +96,10 @@ class RuntimeController(QObject):
         )
         self._processes[task_name] = process
         self._buffers[task_name] = ""
-        # PyInstaller points SetDllDirectoryW at ``sys._MEIPASS``. Windows
-        # child processes inherit that search path; without temporarily
-        # clearing it, UE4 can load MSVCP140.dll from this GUI package and
-        # keep the package locked.  QProcess creates the OS process during
-        # start()/waitForStarted(), after which the GUI's bundle path is safe
-        # to restore.
+        # PyInstaller 把 SetDllDirectoryW 指向 sys._MEIPASS，Windows 子进程
+        # 会继承这个搜索路径。不清掉的话 UE4 会从 GUI 的打包目录里加载
+        # MSVCP140.dll，把包锁住。QProcess 在 start()/waitForStarted() 期间
+        # 创建 OS 进程，之后就能把 bundle 路径恢复回去。
         bundle_root = getattr(sys, "_MEIPASS", None)
         try:
             _set_frozen_dll_directory(None)
@@ -126,9 +125,8 @@ class RuntimeController(QObject):
             self.task_output.emit(task_name, line.rstrip("\r"))
 
     def _finish(self, task_name: str, exit_code: int) -> None:
-        # Keep the stopped QProcess parented to the controller until either the
-        # task is started again or the controller is destroyed. Deleting it
-        # from inside its own finished signal can race Qt event processing.
+        # 停下来的 QProcess 继续挂在 controller 下，等下次 start 或 controller
+        # 销毁时再删。在自己的 finished 信号里 deleteLater 会和 Qt 事件处理打架。
         process = self._processes.get(task_name)
         if process is not None:
             self._read_output(task_name, process)

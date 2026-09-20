@@ -1,4 +1,4 @@
-"""Build external commands without depending on Qt or shell string interpolation."""
+"""构造外部进程命令。不依赖 Qt，也不做 shell 字符串拼接。"""
 
 from __future__ import annotations
 
@@ -23,6 +23,8 @@ class CommandSpec:
 
 
 def windows_path_to_wsl(path: Path) -> str:
+    # 相对路径先 resolve 成绝对，再要求必须是盘符路径（C:\...），
+    # 否则 wsl.exe 那边没法映射到 /mnt/<drive>/...
     value = str(path)
     pure = PureWindowsPath(value)
     if not pure.drive:
@@ -128,6 +130,8 @@ class CommandBuilder:
         return CommandSpec("wsl.exe", args, self.config.repo_root)
 
     def run_mission(self, plan: MissionPlan) -> CommandSpec:
+        # 结果目录按 时间戳 + 环境名 分桶，方便回溯是哪次跑出来的。
+        # 环境名里的非字母数字统一压成下划线，避免路径里出现奇怪字符。
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", self.config.environment_name).strip("_")
         result_root = self.config.results_dir / f"gui_{slug or 'environment'}_{stamp}"

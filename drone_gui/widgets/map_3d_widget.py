@@ -14,6 +14,7 @@ SEMANTIC_COLORS = (
 
 
 def render_coordinates(ned_points) -> np.ndarray:
+    # NED 的 D 朝下，GL 里 Z 朝上，渲染前把 Z 翻个号
     values = np.asarray(ned_points, dtype=np.float32).reshape((-1, 3))
     if not len(values):
         return values.copy()
@@ -67,6 +68,7 @@ class Map3DWidget(gl.GLViewWidget):
         if not len(self._points):
             self.map_item.setData(pos=self._points)
             return
+        # 按高度从低到高调色，低处偏蓝、高处偏黄，方便一眼看出层次
         heights = self._points[:, 2]
         low, high = float(heights.min()), float(heights.max())
         ratio = np.clip((heights - low) / max(0.1, high - low), 0.0, 1.0)
@@ -96,6 +98,7 @@ class Map3DWidget(gl.GLViewWidget):
             for index in range(len(values))
         ], dtype=np.float32) if values else np.empty((0, 4), dtype=np.float32)
         self.semantic_item.setData(pos=positions, color=colors, size=10, pxMode=True)
+        # GL 里画不了文字，用 QLabel 叠在 viewport 上，每帧投影重定位
         font = QFont("Microsoft YaHei UI", 9, QFont.Bold)
         for index, (item, position) in enumerate(zip(values, positions)):
             red, green, blue, _alpha = SEMANTIC_COLORS[index % len(SEMANTIC_COLORS)]
@@ -137,6 +140,7 @@ class Map3DWidget(gl.GLViewWidget):
             projected = matrix.map(QVector3D(*[float(value) for value in position]))
             x = int((projected.x() + 1.0) * self.width() * 0.5)
             y = int((1.0 - projected.y()) * self.height() * 0.5)
+            # z 超出 [-1, 1] 说明在相机背后，直接藏掉
             inside = -1.0 <= projected.z() <= 1.0 and (
                 -label.width() < x < self.width() and 0 < y < self.height()
             )

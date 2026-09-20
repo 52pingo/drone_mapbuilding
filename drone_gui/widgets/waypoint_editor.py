@@ -57,6 +57,7 @@ class WaypointEditor(QWidget):
         layout.addWidget(home_button)
 
     def set_waypoints(self, points: List[Waypoint]) -> None:
+        # setRowCount 和 setItem 都会触发 itemChanged，先立个旗子挡住
         self._updating = True
         self.table.setRowCount(len(points))
         for row, point in enumerate(points):
@@ -84,6 +85,7 @@ class WaypointEditor(QWidget):
         self.table.selectRow(len(points) - 1)
 
     def _safe_waypoints(self) -> List[Waypoint]:
+        # 用户正在单元格里打字时 text() 可能是空串或半截数字，float() 会炸
         try:
             return self.waypoints()
         except (TypeError, ValueError, AttributeError):

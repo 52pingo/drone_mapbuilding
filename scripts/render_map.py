@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the current latched OctoMap point cloud as a top-down PNG."""
+"""Dump the latched OctoMap cloud to a top-down PNG."""
 
 import os
 import sys
@@ -20,14 +20,13 @@ from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
 
 
-OUTPUT = (
-    sys.argv[1] if len(sys.argv) > 1 else "/home/hw/logs/octomap_map_qgc.png"
-)
+OUTPUT = sys.argv[1] if len(sys.argv) > 1 else "/home/hw/logs/octomap_map_qgc.png"
 
 
 class MapRenderer(Node):
     def __init__(self):
         super().__init__("qgc_map_renderer")
+        # octomap_server 用 latched 话题发点云，得 TRANSIENT_LOCAL 才收得到
         qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -50,6 +49,7 @@ class MapRenderer(Node):
         if points.size == 0:
             print("OctoMap cloud is empty", flush=True)
             os._exit(1)
+        # read_points 返回 structured array 还是普通二维数组，看版本
         if points.dtype.names:
             x = points["x"].astype(float)
             y = points["y"].astype(float)
@@ -60,11 +60,13 @@ class MapRenderer(Node):
             z = points[:, 2].astype(float)
 
         original_count = len(x)
+        # 点太多 scatter 会卡，均匀抽到 15 万
         if original_count > 150000:
             indices = np.linspace(0, original_count - 1, 150000).astype(int)
             x, y, z = x[indices], y[indices], z[indices]
 
         figure, axes = plt.subplots(figsize=(9, 8))
+        # z 是 NED 高度，向下为正；取负号后高处偏黄
         occupancy = axes.scatter(
             x, y, c=-z, s=2.2, cmap="viridis_r", linewidths=0
         )
