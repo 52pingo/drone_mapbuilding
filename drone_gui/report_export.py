@@ -10,15 +10,23 @@ from typing import Iterable
 
 
 def _trajectory_svg(frames: Iterable[dict]) -> str:
-    positions = [
-        item.get("position") for item in frames
-        if isinstance(item.get("position"), list)
-        and len(item["position"]) == 3
-    ]
+    # 遥测来自会话 JSON，字段类型不可信：position 可能是 null、缺项或字符串。
+    # 逐项转 float 并跳过坏的，别让一条脏数据把整份报告带崩。
+    positions = []
+    for item in frames:
+        if not isinstance(item, dict):
+            continue
+        position = item.get("position")
+        if not isinstance(position, list) or len(position) != 3:
+            continue
+        try:
+            positions.append([float(value) for value in position])
+        except (TypeError, ValueError):
+            continue
     if len(positions) < 2:
         return '<div class="empty">没有可回放的轨迹遥测</div>'
-    north = [float(point[0]) for point in positions]
-    east = [float(point[1]) for point in positions]
+    north = [point[0] for point in positions]
+    east = [point[1] for point in positions]
     n_min, n_max = min(north), max(north)
     e_min, e_max = min(east), max(east)
     n_span = max(1.0, n_max - n_min)
