@@ -22,6 +22,7 @@ _TMP_SEQ = itertools.count()
 #: Temp files older than this are assumed to be crash leftovers and are reaped.
 _TMP_STALE_SECONDS = 5.0
 
+
 class FrameRateMeter:
     """Estimate recent throughput without including model warm-up time."""
 
@@ -36,6 +37,7 @@ class FrameRateMeter:
             return 0.0
         elapsed = self.samples[-1] - self.samples[0]
         return (len(self.samples) - 1) / elapsed if elapsed > 0.0 else 0.0
+
 
 def detection_payload(detection) -> dict:
     """Convert a Detection-like object to the stable GUI wire schema."""
@@ -53,6 +55,7 @@ def detection_payload(detection) -> dict:
             if getattr(detection, "world_ned", None) is not None else None
         ),
     }
+
 
 def evidence_catalog(events: Sequence[dict]) -> list[dict]:
     """Summarize the first and latest saved evidence for every class."""
@@ -77,6 +80,7 @@ def evidence_catalog(events: Sequence[dict]) -> list[dict]:
         item["last_depth_m"] = event.get("depth_m")
     return [catalog[label] for label in sorted(catalog)]
 
+
 def build_snapshot(
     frame_index: int,
     frame_shape,
@@ -99,6 +103,7 @@ def build_snapshot(
         "semantic_objects": list(semantic_objects),
         "image": image_name,
     }
+
 
 def annotate_live(frame, detections: Sequence, cv2, fps: float, frame_index: int):
     """Render the complete current detection set for the operator view."""
@@ -131,6 +136,7 @@ def annotate_live(frame, detections: Sequence, cv2, fps: float, frame_index: int
     )
     return canvas
 
+
 def read_latest_snapshot(directory: Path, retries: int = 1) -> tuple[dict, bytes]:
     """Read ``latest.json`` plus its frame image, retrying a raced deletion.
 
@@ -148,6 +154,7 @@ def read_latest_snapshot(directory: Path, retries: int = 1) -> tuple[dict, bytes
             if attempt >= retries:
                 raise
     raise AssertionError("unreachable")
+
 
 class LiveFrameWriter:
     """Commit JPEG first and JSON last so readers see complete frames."""

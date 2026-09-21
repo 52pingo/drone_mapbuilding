@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from drone_gui.environment_discovery import discover_runtime
 from drone_gui.models import RuntimeConfig
 
