@@ -102,6 +102,15 @@ QPushButton[nav="true"]:checked {
     color: #8FE0E7;
     font-weight: 650;
 }
+/* 上面这些变体规则和 QPushButton:focus 特异性相同（元素+属性 vs 元素+伪类），
+   又排在它后面，会把 focus 的描边整个盖掉 —— 键盘用户看不到焦点在哪。
+   这里显式给每个变体补 focus：多一个伪类，特异性更高，必然生效。 */
+QPushButton[kind="primary"]:focus,
+QPushButton[kind="quiet"]:focus,
+QPushButton[kind="danger"]:focus,
+QPushButton[nav="true"]:focus {
+    border: 2px solid #4FB4C1;
+}
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
     min-height: 29px;
     border: 1px solid #344650;
