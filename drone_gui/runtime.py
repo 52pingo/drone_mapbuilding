@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import locale
 import os
 from pathlib import Path
 import sys
@@ -63,7 +62,10 @@ class RuntimeController(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._processes: Dict[str, QProcess] = {}
-        self._buffers: Dict[str, str] = {}
+        # 累积原始字节，只在完整行边界上解码，避免多字节字符被分片切断。
+        self._buffers: Dict[str, bytes] = {}
+        # 已经走过 _finish 的任务名，用于 errorOccurred / finished 双路去重。
+        self._finished: set[str] = set()
 
     def is_running(self, task_name: str) -> bool:
         process = self._processes.get(task_name)
@@ -87,15 +89,14 @@ class RuntimeController(QObject):
             lambda name=task_name, command=spec.display(): self.task_started.emit(name, command)
         )
         process.errorOccurred.connect(
-            lambda error, name=task_name, proc=process: self.task_error.emit(
-                name, proc.errorString() or str(error)
-            )
+            lambda error, name=task_name, proc=process: self._handle_error(name, proc, error)
         )
         process.finished.connect(
             lambda code, _status, name=task_name: self._finish(name, code)
         )
         self._processes[task_name] = process
-        self._buffers[task_name] = ""
+        self._buffers[task_name] = b""
+        self._finished.discard(task_name)
         # PyInstaller 把 SetDllDirectoryW 指向 sys._MEIPASS，Windows 子进程
         # 会继承这个搜索路径。不清掉的话 UE4 会从 GUI 的打包目录里加载
         # MSVCP140.dll，把包锁住。QProcess 在 start()/waitForStarted() 期间
@@ -110,27 +111,37 @@ class RuntimeController(QObject):
                 _set_frozen_dll_directory(str(bundle_root))
         return True
 
+    def _handle_error(self, task_name: str, process: QProcess, error) -> None:
+        self.task_error.emit(task_name, process.errorString() or str(error))
+        # FailedToStart 时 Qt 只发 errorOccurred、不发 finished，必须在这里
+        # 走清理路径；其他错误 finished 也会到，靠 _finished 去重。
+        self._finish(task_name, process.exitCode())
+
     def _read_output(self, task_name: str, process: QProcess) -> None:
         payload = bytes(process.readAllStandardOutput())
         if not payload:
             return
-        try:
-            text = payload.decode("utf-8")
-        except UnicodeDecodeError:
-            text = payload.decode(locale.getpreferredencoding(False), errors="replace")
-        buffered = self._buffers.get(task_name, "") + text
-        lines = buffered.split("\n")
+        buffered = self._buffers.get(task_name, b"") + payload
+        lines = buffered.split(b"\n")
+        # 行尾残字节（可能是不完整的多字节字符）留到下一片再拼。
         self._buffers[task_name] = lines.pop()
         for line in lines:
-            self.task_output.emit(task_name, line.rstrip("\r"))
+            self.task_output.emit(
+                task_name, line.decode("utf-8", errors="replace").rstrip("\r")
+            )
 
     def _finish(self, task_name: str, exit_code: int) -> None:
+        if task_name in self._finished:
+            return
+        self._finished.add(task_name)
         # 停下来的 QProcess 继续挂在 controller 下，等下次 start 或 controller
         # 销毁时再删。在自己的 finished 信号里 deleteLater 会和 Qt 事件处理打架。
         process = self._processes.get(task_name)
         if process is not None:
             self._read_output(task_name, process)
-        remainder = self._buffers.pop(task_name, "")
+        remainder = self._buffers.pop(task_name, b"")
         if remainder:
-            self.task_output.emit(task_name, remainder.rstrip("\r"))
+            self.task_output.emit(
+                task_name, remainder.decode("utf-8", errors="replace").rstrip("\r")
+            )
         self.task_finished.emit(task_name, exit_code)

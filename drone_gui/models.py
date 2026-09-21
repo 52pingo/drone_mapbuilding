@@ -9,6 +9,16 @@ from pathlib import Path
 from typing import Iterable, List, Optional
 
 
+def _as_dict(value) -> dict:
+    """JSON 里的 null / 非 dict 一律当空 dict，避免 .get 炸掉。"""
+    return value if isinstance(value, dict) else {}
+
+
+def _as_list(value) -> list:
+    """JSON 里的 null / 非 list 一律当空 list，避免 for 迭代 None。"""
+    return value if isinstance(value, list) else []
+
+
 CITYPARK_GOALS = (
     (181.55, -583.34),
     (-395.53, -409.16),
@@ -95,8 +105,18 @@ class MissionPlan:
 
     @classmethod
     def from_dict(cls, payload: dict) -> "MissionPlan":
-        values = dict(payload)
-        values["waypoints"] = [Waypoint(**point) for point in payload.get("waypoints", [])]
+        payload = _as_dict(payload)
+        known = {item.name for item in fields(cls)}
+        values = {name: value for name, value in payload.items() if name in known}
+        waypoint_fields = {item.name for item in fields(Waypoint)}
+        values["waypoints"] = [
+            Waypoint(**{
+                key: value
+                for key, value in _as_dict(point).items()
+                if key in waypoint_fields
+            })
+            for point in _as_list(values.get("waypoints"))
+        ]
         return cls(**values)
 
     def save(self, path: Path) -> None:
@@ -164,7 +184,7 @@ class RuntimeConfig:
         config = cls.defaults(repo_root)
         if path is None or not path.is_file():
             return config
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = _as_dict(json.loads(path.read_text(encoding="utf-8")))
         path_names = {
             "repo_root", "ue4_editor", "ue4_project", "perception_python",
             "airsim_client", "weights", "results_dir", "ue4_executable",
@@ -174,11 +194,10 @@ class RuntimeConfig:
         for name, value in payload.items():
             if name not in known:
                 continue
-            setattr(
-                config,
-                name,
-                Path(value) if name in path_names and value else value,
-            )
+            if name in path_names and value:
+                # 非字符串真值（如 123）直接 Path(123) 会抛 TypeError，先 str 兜底。
+                value = value if isinstance(value, Path) else Path(str(value))
+            setattr(config, name, value)
         config.repo_root = repo_root.resolve()
         return config
 

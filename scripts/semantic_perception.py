@@ -225,7 +225,9 @@ def collect_detections(result, depth, frame_shape, args, np) -> List[Detection]:
         depth_m = None
         if depth is not None:
             depth_m = box_depth_m(depth, (x1, y1, x2, y2), frame_shape, np)
-            if depth_m is not None and depth_m > args.max_depth_m:
+            if depth_m is None:
+                continue
+            if depth_m > args.max_depth_m:
                 continue
         detections.append(Detection(
             class_id=class_id,
@@ -238,7 +240,13 @@ def collect_detections(result, depth, frame_shape, args, np) -> List[Detection]:
 
 
 def safe_label(label: str) -> str:
-    clean = re.sub(r"[^A-Za-z0-9_-]+", "_", label).strip("_")
+    parts = []
+    for ch in label:
+        if ch.isalnum() or ch in "-_":
+            parts.append(ch)
+        else:
+            parts.append("_")
+    clean = re.sub(r"_+", "_", "".join(parts)).strip("_")
     return clean or "unknown"
 
 
@@ -383,138 +391,139 @@ def main() -> int:
     if live_writer is not None:
         print(f"live feed -> {live_writer.directory}")
 
-    while True:
-        if args.stop_file and Path(args.stop_file).exists():
-            print("stop file detected")
-            break
-        if args.max_runtime > 0 and time.monotonic() - started >= args.max_runtime:
-            print("max runtime reached")
-            break
+    try:
+        while True:
+            if args.stop_file and Path(args.stop_file).exists():
+                print("stop file detected")
+                break
+            if args.max_runtime > 0 and time.monotonic() - started >= args.max_runtime:
+                print("max runtime reached")
+                break
 
-        if args.source_image:
-            frame = cv2.imread(args.source_image)
-            if frame is None:
-                raise RuntimeError(f"cannot read source image: {args.source_image}")
-            depth = None
-        else:
-            responses = client.simGetImages([
-                airsim.ImageRequest(
-                    args.camera, airsim.ImageType.Scene, False, True
-                ),
-                airsim.ImageRequest(
-                    args.camera, airsim.ImageType.DepthPerspective, True, False
-                ),
-            ], vehicle_name=args.vehicle)
-            if len(responses) != 2:
-                raise RuntimeError("AirSim did not return both Scene and Depth")
-            frame = decode_scene(responses[0], cv2, np)
-            depth = decode_depth(responses[1], np)
+            if args.source_image:
+                frame = cv2.imread(args.source_image)
+                if frame is None:
+                    raise RuntimeError(f"cannot read source image: {args.source_image}")
+                depth = None
+            else:
+                responses = client.simGetImages([
+                    airsim.ImageRequest(
+                        args.camera, airsim.ImageType.Scene, False, True
+                    ),
+                    airsim.ImageRequest(
+                        args.camera, airsim.ImageType.DepthPerspective, True, False
+                    ),
+                ], vehicle_name=args.vehicle)
+                if len(responses) != 2:
+                    raise RuntimeError("AirSim did not return both Scene and Depth")
+                frame = decode_scene(responses[0], cv2, np)
+                depth = decode_depth(responses[1], np)
 
-        result = model.predict(
-            source=frame,
-            conf=args.confidence,
-            iou=args.iou,
-            imgsz=args.image_size,
-            device=args.device,
-            verbose=False,
-        )[0]
-        detections = collect_detections(result, depth, frame.shape, args, np)
-        if not args.source_image:
-            response = responses[0]
-            position = response.camera_position
-            orientation = response.camera_orientation
-            camera_position = (position.x_val, position.y_val, position.z_val)
-            camera_quaternion = (
-                orientation.w_val, orientation.x_val,
-                orientation.y_val, orientation.z_val,
-            )
-            detections = [dataclasses.replace(
-                detection,
-                world_ned=project_box_center_ned(
-                    detection.box, detection.depth_m, frame.shape, camera_fov,
-                    camera_position, camera_quaternion,
-                ),
-            ) for detection in detections]
-        frame_index += 1
-        live_fps = fps_meter.tick(time.monotonic())
-        semantic_tracker.update(detections, time.time())
-        new_events = tracker.update(detections, time.monotonic())
+            result = model.predict(
+                source=frame,
+                conf=args.confidence,
+                iou=args.iou,
+                imgsz=args.image_size,
+                device=args.device,
+                verbose=False,
+            )[0]
+            detections = collect_detections(result, depth, frame.shape, args, np)
+            if not args.source_image:
+                response = responses[0]
+                position = response.camera_position
+                orientation = response.camera_orientation
+                camera_position = (position.x_val, position.y_val, position.z_val)
+                camera_quaternion = (
+                    orientation.w_val, orientation.x_val,
+                    orientation.y_val, orientation.z_val,
+                )
+                detections = [dataclasses.replace(
+                    detection,
+                    world_ned=project_box_center_ned(
+                        detection.box, detection.depth_m, frame.shape, camera_fov,
+                        camera_position, camera_quaternion,
+                    ),
+                ) for detection in detections]
+            frame_index += 1
+            live_fps = fps_meter.tick(time.monotonic())
+            semantic_tracker.update(detections, time.time())
+            new_events = tracker.update(detections, time.monotonic())
 
-        for detection in new_events:
-            sequence = len(events) + 1
-            class_image_index = tracker.counts[detection.label]
-            captured_at = dt.datetime.now().astimezone()
-            filename = (
-                f"scene_{class_image_index:03d}_frame_{frame_index:06d}_"
-                f"{captured_at.strftime('%Y%m%d_%H%M%S_%f')[:-3]}.jpg"
-            )
-            class_dir = output_dir / safe_label(detection.label)
-            class_dir.mkdir(parents=True, exist_ok=True)
-            image_path = class_dir / filename
-            boxed = annotate(
-                frame, best_detection_per_class(detections),
-                detection.label, cv2, class_image_index,
-            )
-            if not cv2.imwrite(str(image_path), boxed):
-                raise RuntimeError(f"failed to save evidence image: {image_path}")
-            event = {
-                "sequence": sequence,
-                "captured_at": captured_at.isoformat(),
-                "frame_index": frame_index,
-                "class_image_index": class_image_index,
-                "first_seen": class_image_index == 1,
-                "class_id": detection.class_id,
-                "label": detection.label,
-                "confidence": round(detection.confidence, 6),
-                "depth_m": (
-                    round(detection.depth_m, 3)
-                    if detection.depth_m is not None else None
-                ),
-                "bbox_xyxy": list(detection.box),
-                "position_ned": (
-                    list(detection.world_ned)
-                    if detection.world_ned is not None else None
-                ),
-                "image": image_path.relative_to(output_dir).as_posix(),
-            }
-            events.append(event)
-            append_jsonl(output_dir / "events.jsonl", event)
-            write_summary(output_dir / "summary.json", metadata, events)
-            depth_text = (
-                f" depth={detection.depth_m:.1f}m"
-                if detection.depth_m is not None else ""
-            )
-            print(
-                f"CAPTURED label={detection.label} "
-                f"class_image={class_image_index} "
-                f"conf={detection.confidence:.3f}{depth_text} -> {image_path}"
-            )
+            for detection in new_events:
+                sequence = len(events) + 1
+                class_image_index = tracker.counts[detection.label]
+                captured_at = dt.datetime.now().astimezone()
+                filename = (
+                    f"scene_{class_image_index:03d}_frame_{frame_index:06d}_"
+                    f"{captured_at.strftime('%Y%m%d_%H%M%S_%f')[:-3]}.jpg"
+                )
+                class_dir = output_dir / safe_label(detection.label)
+                class_dir.mkdir(parents=True, exist_ok=True)
+                image_path = class_dir / filename
+                boxed = annotate(
+                    frame, best_detection_per_class(detections),
+                    detection.label, cv2, class_image_index,
+                )
+                if not cv2.imwrite(str(image_path), boxed):
+                    raise RuntimeError(f"failed to save evidence image: {image_path}")
+                event = {
+                    "sequence": sequence,
+                    "captured_at": captured_at.isoformat(),
+                    "frame_index": frame_index,
+                    "class_image_index": class_image_index,
+                    "first_seen": class_image_index == 1,
+                    "class_id": detection.class_id,
+                    "label": detection.label,
+                    "confidence": round(detection.confidence, 6),
+                    "depth_m": (
+                        round(detection.depth_m, 3)
+                        if detection.depth_m is not None else None
+                    ),
+                    "bbox_xyxy": list(detection.box),
+                    "position_ned": (
+                        list(detection.world_ned)
+                        if detection.world_ned is not None else None
+                    ),
+                    "image": image_path.relative_to(output_dir).as_posix(),
+                }
+                events.append(event)
+                append_jsonl(output_dir / "events.jsonl", event)
+                write_summary(output_dir / "summary.json", metadata, events)
+                depth_text = (
+                    f" depth={detection.depth_m:.1f}m"
+                    if detection.depth_m is not None else ""
+                )
+                print(
+                    f"CAPTURED label={detection.label} "
+                    f"class_image={class_image_index} "
+                    f"conf={detection.confidence:.3f}{depth_text} -> {image_path}"
+                )
 
-        if live_writer is not None:
-            live_writer.publish(
-                frame, detections, events, frame_index, live_fps,
-                semantic_tracker.snapshot(),
-            )
+            if live_writer is not None:
+                live_writer.publish(
+                    frame, detections, events, frame_index, live_fps,
+                    semantic_tracker.snapshot(),
+                )
 
-        if args.source_image:
-            break
-        if args.max_events > 0 and len(events) >= args.max_events:
-            print("max events reached")
-            break
-        time.sleep(args.interval)
-
-    metadata["finished_at"] = dt.datetime.now().astimezone().isoformat()
-    metadata["frames_processed"] = frame_index
-    metadata["class_image_counts"] = dict(sorted(tracker.counts.items()))
-    write_summary(output_dir / "summary.json", metadata, events)
-    (output_dir / "semantic_objects.json").write_text(
-        json.dumps({
-            "coordinate_frame": "px4_local_ned",
-            "objects": semantic_tracker.snapshot(),
-        }, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    print(f"semantic perception stopped: frames={frame_index} events={len(events)}")
+            if args.source_image and frame_index >= args.confirm_frames:
+                break
+            if args.max_events > 0 and len(events) >= args.max_events:
+                print("max events reached")
+                break
+            time.sleep(args.interval)
+    finally:
+        metadata["finished_at"] = dt.datetime.now().astimezone().isoformat()
+        metadata["frames_processed"] = frame_index
+        metadata["class_image_counts"] = dict(sorted(tracker.counts.items()))
+        write_summary(output_dir / "summary.json", metadata, events)
+        (output_dir / "semantic_objects.json").write_text(
+            json.dumps({
+                "coordinate_frame": "px4_local_ned",
+                "objects": semantic_tracker.snapshot(),
+            }, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(f"semantic perception stopped: frames={frame_index} events={len(events)}")
     return 0
 
 

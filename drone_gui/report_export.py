@@ -9,10 +9,35 @@ from pathlib import Path
 from typing import Iterable
 
 
+def _as_dict(value) -> dict:
+    """JSON 里的 null / 非 dict 一律当空 dict，避免 .get 炸掉。"""
+    return value if isinstance(value, dict) else {}
+
+
+def _as_list(value) -> list:
+    """JSON 里的 null / 非 list 一律当空 list，避免 for 迭代 None。"""
+    return value if isinstance(value, list) else []
+
+
+def _as_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _trajectory_svg(frames: Iterable[dict]) -> str:
     # 遥测来自会话 JSON，字段类型不可信：position 可能是 null、缺项或字符串。
     # 逐项转 float 并跳过坏的，别让一条脏数据把整份报告带崩。
     positions = []
+    # 签名是 Iterable，可能是生成器；不能用 _as_list 收窄成 list
     for item in frames:
         if not isinstance(item, dict):
             continue
@@ -75,19 +100,23 @@ def generate_report(
     root: Path, manifest: dict, telemetry: list[dict], artifacts: list[dict]
 ) -> Path:
     """Write report.html with no network or JavaScript dependencies."""
-    summary = manifest.get("summary", {})
-    mission = manifest.get("mission", {})
+    manifest = _as_dict(manifest)
+    telemetry = _as_list(telemetry)
+    artifacts = _as_list(artifacts)
+    summary = _as_dict(manifest.get("summary"))
+    mission = _as_dict(manifest.get("mission"))
+    model = _as_dict(manifest.get("model"))
     evidence = _evidence_counts(root)
-    last = telemetry[-1] if telemetry else {}
+    last = _as_dict(telemetry[-1]) if telemetry else {}
     evidence_rows = "".join(
         f"<tr><td>{escape(label)}</td><td>{count}</td></tr>"
         for label, count in sorted(evidence.items())
     ) or '<tr><td colspan="2">无类别证据</td></tr>'
     artifact_rows = "".join(
         "<tr><td>%s</td><td>%s</td><td>%s</td></tr>" % (
-            escape(str(item.get("path", ""))),
-            escape(str(item.get("kind", ""))),
-            f"{int(item.get('size', 0)):,}",
+            escape(str(_as_dict(item).get("path", ""))),
+            escape(str(_as_dict(item).get("kind", ""))),
+            f"{_as_int(_as_dict(item).get('size', 0)):,}",
         ) for item in artifacts
     )
     image_candidates = [
@@ -129,15 +158,15 @@ svg{{display:block;width:100%;height:auto}}@media(max-width:760px){{.grid{{grid-
 <h1>{escape(root.name)}</h1><div class="muted">坐标系 PX4 Local NED · 离线可读</div></div>
 <div class="badge">{escape(str(manifest.get('status', 'unknown')).upper())}</div></header>
 <section class="grid">
-<div class="metric"><b>{int(summary.get('telemetry_samples', 0)):,}</b><span>遥测样本</span></div>
-<div class="metric"><b>{int(summary.get('point_count', 0)):,}</b><span>占据点</span></div>
-<div class="metric"><b>{int(summary.get('semantic_objects', 0))}</b><span>语义对象</span></div>
-<div class="metric"><b>{float(last.get('elapsed', 0.0)):.1f}s</b><span>任务时间</span></div>
+<div class="metric"><b>{_as_int(summary.get('telemetry_samples', 0)):,}</b><span>遥测样本</span></div>
+<div class="metric"><b>{_as_int(summary.get('point_count', 0)):,}</b><span>占据点</span></div>
+<div class="metric"><b>{_as_int(summary.get('semantic_objects', 0))}</b><span>语义对象</span></div>
+<div class="metric"><b>{_as_float(last.get('elapsed', 0.0)):.1f}s</b><span>任务时间</span></div>
 </section>
 <section class="columns"><div class="panel"><h2>任务配置</h2><table>{_table_rows([
 ('任务名', mission.get('name', 'CityPark')), ('航点', mission.get('goals', '')),
 ('高度', mission.get('flight_z', '')), ('最大时长', mission.get('max_mission_time', '')),
-('模型', manifest.get('model', {}).get('name', '')), ('模型 SHA-256', manifest.get('model', {}).get('sha256', '')),
+('模型', model.get('name', '')), ('模型 SHA-256', model.get('sha256', '')),
 ])}</table></div><div class="panel"><h2>闭环状态</h2><table>{_table_rows([
 ('最终阶段', last.get('state', 'unknown')), ('已锁定', last.get('armed', 'unknown')),
 ('闭环确认', summary.get('closed_loop', False)), ('创建时间', manifest.get('created_at', '')),

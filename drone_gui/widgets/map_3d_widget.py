@@ -12,6 +12,15 @@ SEMANTIC_COLORS = (
     (0.36, 0.68, 0.94, 1.0), (0.82, 0.48, 0.91, 1.0),
 )
 
+_LUT_SIZE = 256
+_HEIGHT_LUT = np.empty((_LUT_SIZE, 4), dtype=np.float32)
+_t = np.linspace(0.0, 1.0, _LUT_SIZE, dtype=np.float32)
+_HEIGHT_LUT[:, 0] = 0.18 + 0.18 * _t
+_HEIGHT_LUT[:, 1] = 0.48 + 0.36 * _t
+_HEIGHT_LUT[:, 2] = 0.62 + 0.30 * _t
+_HEIGHT_LUT[:, 3] = 0.82
+del _t
+
 
 def render_coordinates(ned_points) -> np.ndarray:
     # NED 的 D 朝下，GL 里 Z 朝上，渲染前把 Z 翻个号
@@ -21,6 +30,15 @@ def render_coordinates(ned_points) -> np.ndarray:
     result = values.copy()
     result[:, 2] *= -1.0
     return result
+
+
+def _finite_rows(values: np.ndarray) -> np.ndarray:
+    if not len(values):
+        return values
+    mask = np.all(np.isfinite(values), axis=1)
+    if mask.all():
+        return values
+    return values[mask]
 
 
 class Map3DWidget(gl.GLViewWidget):
@@ -63,25 +81,55 @@ class Map3DWidget(gl.GLViewWidget):
         for item in (self.map_item, self.path_item, self.drone_item, self.semantic_item):
             self.addItem(item)
 
+    @staticmethod
+    def _finite_positions(items):
+        """Filter items whose position_ned is a finite length-3 vector.
+
+        Returns (kept_items, positions) where positions is (M, 3) float32.
+        """
+        kept: list[dict] = []
+        coords: list[np.ndarray] = []
+        for item in items:
+            pos = item.get("position_ned")
+            if pos is None:
+                continue
+            try:
+                arr = np.asarray(pos, dtype=np.float32).reshape(-1)
+            except (TypeError, ValueError):
+                continue
+            if arr.shape[0] != 3 or not np.all(np.isfinite(arr)):
+                continue
+            kept.append(item)
+            coords.append(arr)
+        if not coords:
+            return kept, np.empty((0, 3), dtype=np.float32)
+        return kept, np.stack(coords).astype(np.float32, copy=False)
+
     def set_points(self, points) -> None:
-        self._points = render_coordinates(points)
+        rendered = render_coordinates(points)
+        rendered = _finite_rows(rendered)
+        self._points = rendered
         if not len(self._points):
             self.map_item.setData(pos=self._points)
             return
         # 按高度从低到高调色，低处偏蓝、高处偏黄，方便一眼看出层次
         heights = self._points[:, 2]
-        low, high = float(heights.min()), float(heights.max())
-        ratio = np.clip((heights - low) / max(0.1, high - low), 0.0, 1.0)
-        colors = np.column_stack((
-            0.18 + 0.18 * ratio, 0.48 + 0.36 * ratio,
-            0.62 + 0.30 * ratio, np.full(len(ratio), 0.82),
-        )).astype(np.float32)
+        low = float(heights.min())
+        high = float(heights.max())
+        span = high - low
+        if not np.isfinite(span) or span < 0.1:
+            span = 0.1
+        ratio = np.clip((heights - low) / span, 0.0, 1.0)
+        indices = (ratio * (_LUT_SIZE - 1)).astype(np.int32)
+        colors = _HEIGHT_LUT[indices]
         self.map_item.setData(
             pos=self._points, color=colors, size=self.point_size, pxMode=True
         )
 
     def set_trajectory(self, ned_positions) -> None:
-        self._trajectory = render_coordinates(ned_positions)
+        rendered = render_coordinates(ned_positions)
+        rendered = _finite_rows(rendered)
+        self._trajectory = rendered
         self.path_item.setData(pos=self._trajectory)
         self.drone_item.setData(
             pos=self._trajectory[-1:] if len(self._trajectory) else np.empty((0, 3))
@@ -91,8 +139,12 @@ class Map3DWidget(gl.GLViewWidget):
         for label, _position in self._labels:
             label.deleteLater()
         self._labels = []
-        values = [item for item in objects if len(item.get("position_ned", [])) == 3]
-        positions = render_coordinates([item["position_ned"] for item in values])
+        values, ned_positions = self._finite_positions(objects)
+        positions = (
+            render_coordinates(ned_positions)
+            if len(ned_positions)
+            else np.empty((0, 3), dtype=np.float32)
+        )
         colors = np.array([
             SEMANTIC_COLORS[index % len(SEMANTIC_COLORS)]
             for index in range(len(values))
@@ -114,7 +166,7 @@ class Map3DWidget(gl.GLViewWidget):
             label.setAttribute(Qt.WA_TransparentForMouseEvents)
             label.adjustSize()
             label.setVisible(self._semantics_visible)
-            self._labels.append((label, position + np.array([0, 0, 1.2])))
+            self._labels.append((label, position + np.array([0, 0, 1.2], dtype=np.float32)))
         self._position_labels()
 
     def set_path_visible(self, visible: bool) -> None:
@@ -138,10 +190,14 @@ class Map3DWidget(gl.GLViewWidget):
         matrix = self.projectionMatrix(viewport, viewport) * self.viewMatrix()
         for label, position in self._labels:
             projected = matrix.map(QVector3D(*[float(value) for value in position]))
-            x = int((projected.x() + 1.0) * self.width() * 0.5)
-            y = int((1.0 - projected.y()) * self.height() * 0.5)
+            px, py, pz = projected.x(), projected.y(), projected.z()
+            if not (np.isfinite(px) and np.isfinite(py) and np.isfinite(pz)):
+                label.setVisible(False)
+                continue
+            x = int((px + 1.0) * self.width() * 0.5)
+            y = int((1.0 - py) * self.height() * 0.5)
             # z 超出 [-1, 1] 说明在相机背后，直接藏掉
-            inside = -1.0 <= projected.z() <= 1.0 and (
+            inside = -1.0 <= pz <= 1.0 and (
                 -label.width() < x < self.width() and 0 < y < self.height()
             )
             label.setVisible(self._semantics_visible and inside)
@@ -155,7 +211,12 @@ class Map3DWidget(gl.GLViewWidget):
             return
         low, high = values.min(axis=0), values.max(axis=0)
         center = (low + high) * 0.5
+        if not np.all(np.isfinite(center)):
+            self.setCameraPosition(distance=120, elevation=28, azimuth=-55)
+            return
         distance = max(30.0, float(np.linalg.norm(high - low)) * 1.15)
+        if not np.isfinite(distance):
+            distance = 120.0
         self.setCameraPosition(
             pos=QVector3D(*[float(value) for value in center]),
             distance=distance, elevation=28, azimuth=-55,

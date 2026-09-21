@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional, Tuple
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
+    QLabel,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -18,6 +20,8 @@ from drone_gui.models import Waypoint
 
 class WaypointEditor(QWidget):
     waypoints_changed = Signal(object)
+
+    _BAD_CELL_COLOR = QColor("#ffd6d6")
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -45,6 +49,10 @@ class WaypointEditor(QWidget):
         down_button.clicked.connect(lambda: self._move_selected(1))
         home_button.clicked.connect(lambda: self.add_waypoint(0.0, 0.0))
 
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+        self.status_label.setAccessibleName("航点表状态提示")
+
         row = QHBoxLayout()
         row.setSpacing(6)
         for button in (add_button, delete_button, up_button, down_button):
@@ -53,6 +61,7 @@ class WaypointEditor(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
         layout.addWidget(self.table, 1)
+        layout.addWidget(self.status_label)
         layout.addLayout(row)
         layout.addWidget(home_button)
 
@@ -68,6 +77,8 @@ class WaypointEditor(QWidget):
             self.table.setItem(row, 1, QTableWidgetItem(f"{point.north_m:.3f}"))
             self.table.setItem(row, 2, QTableWidgetItem(f"{point.east_m:.3f}"))
         self._updating = False
+        self._clear_bad_cells()
+        self._set_status("")
         self.waypoints_changed.emit(self.waypoints())
 
     def waypoints(self) -> List[Waypoint]:
@@ -80,16 +91,21 @@ class WaypointEditor(QWidget):
 
     def add_waypoint(self, north_m: float, east_m: float) -> None:
         points = self._safe_waypoints()
+        if points is None:
+            # 基底不可解析：不要用只含新点的列表整体重写，否则会抹掉其余航点
+            self._report_parse_failure("添加")
+            return
         points.append(Waypoint(north_m, east_m))
         self.set_waypoints(points)
         self.table.selectRow(len(points) - 1)
 
-    def _safe_waypoints(self) -> List[Waypoint]:
-        # 用户正在单元格里打字时 text() 可能是空串或半截数字，float() 会炸
+    def _safe_waypoints(self) -> Optional[List[Waypoint]]:
+        # 用户正在单元格里打字时 text() 可能是空串或半截数字，float() 会炸。
+        # 返回 None 表示解析失败，返回 [] 表示确实没有航点。
         try:
             return self.waypoints()
         except (TypeError, ValueError, AttributeError):
-            return []
+            return None
 
     def _on_item_changed(self, _item: QTableWidgetItem) -> None:
         if self._updating:
@@ -97,7 +113,10 @@ class WaypointEditor(QWidget):
         try:
             points = self.waypoints()
         except (TypeError, ValueError, AttributeError):
+            self._report_parse_failure("编辑")
             return
+        self._clear_bad_cells()
+        self._set_status("")
         self.waypoints_changed.emit(points)
 
     def _delete_selected(self) -> None:
@@ -105,6 +124,9 @@ class WaypointEditor(QWidget):
         if row < 0:
             return
         points = self._safe_waypoints()
+        if points is None:
+            self._report_parse_failure("删除")
+            return
         if row < len(points):
             points.pop(row)
             self.set_waypoints(points)
@@ -113,8 +135,60 @@ class WaypointEditor(QWidget):
         row = self.table.currentRow()
         target = row + offset
         points = self._safe_waypoints()
+        if points is None:
+            self._report_parse_failure("移动")
+            return
         if row < 0 or target < 0 or target >= len(points):
             return
         points[row], points[target] = points[target], points[row]
         self.set_waypoints(points)
         self.table.selectRow(target)
+
+    # ---- 内部辅助 ----
+
+    def _first_bad_cell(self) -> Optional[Tuple[int, int, str]]:
+        for row in range(self.table.rowCount()):
+            for col in (1, 2):
+                item = self.table.item(row, col)
+                text = "" if item is None else item.text().strip()
+                try:
+                    float(text)
+                except ValueError:
+                    return row, col, text
+        return None
+
+    def _report_parse_failure(self, action: str) -> None:
+        was_updating = self._updating
+        self._updating = True
+        try:
+            bad = self._first_bad_cell()
+            self._clear_bad_cells()
+            if bad is None:
+                self._set_status(f"航点表存在无法解析的单元格，已中止{action}")
+                return
+            row, col, text = bad
+            col_name = "North / m" if col == 1 else "East / m"
+            item = self.table.item(row, col)
+            if item is not None:
+                item.setBackground(self._BAD_CELL_COLOR)
+            shown = text if text else "(空)"
+            self._set_status(
+                f"第 {row + 1} 行「{col_name}」的值 {shown} 不是合法数字，已中止{action}"
+            )
+        finally:
+            self._updating = was_updating
+
+    def _clear_bad_cells(self) -> None:
+        was_updating = self._updating
+        self._updating = True
+        try:
+            for row in range(self.table.rowCount()):
+                for col in (1, 2):
+                    item = self.table.item(row, col)
+                    if item is not None:
+                        item.setData(Qt.BackgroundRole, None)
+        finally:
+            self._updating = was_updating
+
+    def _set_status(self, text: str) -> None:
+        self.status_label.setText(text)

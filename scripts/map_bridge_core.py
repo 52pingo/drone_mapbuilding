@@ -98,14 +98,51 @@ def _semantic_markers(semantic_objects):
     ]
 
 
+def snapshot_sequence(path) -> int | None:
+    """Parse the integer sequence out of a ``points_<seq>.npy`` file name.
+
+    Returns ``None`` for anything that does not match the snapshot naming
+    scheme.  Always sort/compare snapshots through this helper: the raw file
+    name is zero padded but *lexicographic* order still diverges from numeric
+    order once the width overflows (``points_1000000.npy`` < ``points_999999.npy``).
+    """
+    name = Path(path).name
+    prefix = "points_"
+    suffix = ".npy"
+    if not name.startswith(prefix) or not name.endswith(suffix):
+        return None
+    digits = name[len(prefix) : len(name) - len(suffix)]
+    if not digits.isdigit():
+        return None
+    return int(digits)
+
+
+def _snapshot_files(directory: Path):
+    """Return ``(sequence, path)`` pairs for every well-formed snapshot."""
+    found = []
+    for path in Path(directory).glob("points_*.npy"):
+        sequence = snapshot_sequence(path)
+        if sequence is not None:
+            found.append((sequence, path))
+    return found
+
+
+def _latest_sequence(directory: Path) -> int:
+    """Highest sequence already on disk, or 0 when the directory is empty."""
+    return max((sequence for sequence, _ in _snapshot_files(directory)), default=0)
+
+
 class MapSnapshotWriter:
     """Write NPY first and metadata last, retaining three complete snapshots."""
 
     def __init__(self, directory: Path, max_points: int = 80000) -> None:
         self.directory = directory
         self.max_points = max_points
-        self.sequence = 0
         self.directory.mkdir(parents=True, exist_ok=True)
+        # Resume numbering from whatever survived the previous process so a
+        # restart never re-uses (and therefore never clobbers) an existing
+        # snapshot name.
+        self.sequence = _latest_sequence(self.directory)
 
     def publish(
         self,
@@ -142,12 +179,18 @@ class MapSnapshotWriter:
         meta_tmp = self.directory / "latest.json.tmp"
         meta_tmp.write_bytes(payload)
         os.replace(meta_tmp, self.directory / "latest.json")
-        for old in sorted(self.directory.glob("points_*.npy"))[:-3]:
+        self._rotate()
+        return metadata
+
+    def _rotate(self, keep: int = 3) -> None:
+        """Delete all but the ``keep`` numerically newest snapshots."""
+        snapshots = _snapshot_files(self.directory)
+        snapshots.sort(key=lambda item: item[0])
+        for _, old in snapshots[:-keep]:
             try:
                 old.unlink()
             except OSError:
                 pass
-        return metadata
 
 
 def read_snapshot(directory, retries: int = 5, retry_delay: float = 0.01):
