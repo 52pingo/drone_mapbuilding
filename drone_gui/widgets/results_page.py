@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from drone_gui.sessions import scan_sessions
+from drone_gui.sessions import scan_sessions_async
 from drone_gui.session_recovery import SessionRecoveryController
 from drone_gui.widgets.results_tree import (
     PATH_ROLE, SESSION_ROLE, STATUS_ROLE, populate_session_tree,
@@ -55,8 +55,8 @@ class ResultsPage(QWidget):
         browser_layout.setContentsMargins(14, 14, 14, 14)
         title = QLabel("任务成果")
         title.setProperty("role", "sectionTitle")
-        refresh_button = QPushButton("刷新")
-        refresh_button.clicked.connect(self.refresh)
+        self._refresh_button = QPushButton("刷新")
+        self._refresh_button.clicked.connect(self.refresh)
         open_button = QPushButton("打开成果目录")
         open_button.clicked.connect(self._open_results)
         self.replay_button = QPushButton("在三维回放中打开")
@@ -71,7 +71,7 @@ class ResultsPage(QWidget):
         self.recovery.state_changed.connect(self._recovery_state)
         self.recovery.recovered.connect(lambda _manifest: self.refresh())
         actions = QHBoxLayout()
-        actions.addWidget(refresh_button)
+        actions.addWidget(self._refresh_button)
         actions.addWidget(open_button)
         actions.addWidget(self.replay_button)
         actions.addWidget(self.recover_button)
@@ -103,7 +103,17 @@ class ResultsPage(QWidget):
         self._selected_session = None
         self.replay_button.setEnabled(False)
         self.recover_button.setEnabled(False)
-        sessions = scan_sessions(self.results_dir)
+        self._refresh_button.setEnabled(False)
+        self._refresh_button.setText("扫描中…")
+        scan_sessions_async(
+            self.results_dir,
+            on_finished=self._on_scan_finished,
+            on_failed=self._on_scan_failed,
+        )
+
+    def _on_scan_finished(self, sessions) -> None:
+        self._refresh_button.setEnabled(True)
+        self._refresh_button.setText("刷新")
         if not sessions:
             empty = QTreeWidgetItem(["暂无可预览成果", "0"])
             empty.setDisabled(True)
@@ -113,6 +123,14 @@ class ResultsPage(QWidget):
         populate_session_tree(self.tree, sessions)
         self.tree.expandToDepth(0)
         self.detail.setText(f"已载入 {len(sessions)} 个 Session · {self.results_dir}")
+
+    def _on_scan_failed(self, exc: BaseException) -> None:
+        self._refresh_button.setEnabled(True)
+        self._refresh_button.setText("刷新")
+        item = QTreeWidgetItem([f"扫描失败：{exc}", "错误"])
+        item.setDisabled(True)
+        self.tree.addTopLevelItem(item)
+        self.detail.setText(f"扫描目录：{self.results_dir}\n错误：{exc}")
 
     def _selection_changed(self, current, _previous) -> None:
         if current is None:
