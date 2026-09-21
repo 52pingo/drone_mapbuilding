@@ -50,6 +50,54 @@ def bounds_payload(points) -> dict:
     }
 
 
+def _join_columns(columns, separator: str = " ") -> np.ndarray:
+    """Join equal-length string columns with a separator, vectorised."""
+    result = columns[0]
+    for column in columns[1:]:
+        result = np.char.add(np.char.add(result, separator), column)
+    return result
+
+
+def _format_vertices(x, y, z, red, green, blue, semantic_id) -> str:
+    """Render vertex rows as ASCII text, one row per line, vectorised."""
+    if not len(x):
+        return ""
+    lines = _join_columns(
+        (
+            np.char.mod("%.4f", x),
+            np.char.mod("%.4f", y),
+            np.char.mod("%.4f", z),
+            np.char.mod("%d", red),
+            np.char.mod("%d", green),
+            np.char.mod("%d", blue),
+            np.char.mod("%d", semantic_id),
+        )
+    )
+    return "\n".join(lines.tolist()) + "\n"
+
+
+def _format_markers(markers, red: int, green: int, blue: int) -> str:
+    """Render semantic marker rows; markers are few so a loop is fine."""
+    if not markers:
+        return ""
+    rows = []
+    for index, item in enumerate(markers):
+        north, east, down = item["position_ned"]
+        rows.append(
+            f"{float(north):.4f} {float(east):.4f} {-float(down):.4f} "
+            f"{red} {green} {blue} {index}\n"
+        )
+    return "".join(rows)
+
+
+def _semantic_markers(semantic_objects):
+    return [
+        item
+        for item in semantic_objects
+        if isinstance(item, dict) and len(item.get("position_ned", [])) == 3
+    ]
+
+
 class MapSnapshotWriter:
     """Write NPY first and metadata last, retaining three complete snapshots."""
 
@@ -102,66 +150,106 @@ class MapSnapshotWriter:
         return metadata
 
 
+def read_snapshot(directory, retries: int = 5, retry_delay: float = 0.01):
+    """Read a version-consistent (metadata, points) pair.
+
+    ``latest.json`` is written atomically *after* the NPY payload and the
+    payload filename embeds the manifest ``sequence``.  Resolving the payload
+    name through the manifest therefore guarantees the index and the data come
+    from the same publish; a reader that globs ``points_*.npy`` on its own can
+    otherwise pair a fresh index with stale data.  Retries cover the narrow
+    window where the writer has already rotated the payload out of the
+    three-file retention window.
+    """
+    directory = Path(directory)
+    last_error = None
+    for _ in range(max(1, retries)):
+        try:
+            metadata = json.loads((directory / "latest.json").read_text("utf-8"))
+        except FileNotFoundError as error:
+            last_error = error
+            time.sleep(retry_delay)
+            continue
+        sequence = int(metadata["sequence"])
+        name = metadata["points"]
+        if name != f"points_{sequence:06d}.npy":
+            raise ValueError(
+                f"manifest sequence {sequence} does not match payload {name}"
+            )
+        try:
+            points = np.load(directory / name, allow_pickle=False)
+        except FileNotFoundError as error:
+            last_error = error
+            time.sleep(retry_delay)
+            continue
+        return metadata, points
+    if last_error is not None:
+        raise last_error
+    raise FileNotFoundError(directory / "latest.json")
+
+
 def write_ply(path: Path, points, semantic_objects=()) -> None:
     """Export occupancy and semantic marker vertices in N/E/height-up axes."""
     values = np.asarray(points, dtype=np.float32).reshape((-1, 3))
-    markers = [
-        item for item in semantic_objects
-        if isinstance(item, dict) and len(item.get("position_ned", [])) == 3
-    ]
+    markers = _semantic_markers(semantic_objects)
     path.parent.mkdir(parents=True, exist_ok=True)
+    count = len(values) + len(markers)
+    header = (
+        "ply\nformat ascii 1.0\n"
+        "comment axes north east height_up metres\n"
+        f"element vertex {count}\n"
+        "property float x\nproperty float y\nproperty float z\n"
+        "property uchar red\nproperty uchar green\nproperty uchar blue\n"
+        "property int semantic_id\nend_header\n"
+    )
+    if len(values):
+        height = -values[:, 2].astype(np.float64)
+        lo = float(height.min())
+        span = max(0.1, float(height.max()) - lo)
+        ratio = np.clip((height - lo) / span, 0.0, 1.0)
+        red = (45.0 + 40.0 * ratio).astype(np.int64)
+        green = (115.0 + 105.0 * ratio).astype(np.int64)
+        blue = (145.0 + 90.0 * ratio).astype(np.int64)
+        semantic_id = np.full(len(values), -1, dtype=np.int64)
+        body = _format_vertices(
+            values[:, 0], values[:, 1], -values[:, 2], red, green, blue, semantic_id
+        )
+    else:
+        body = ""
+    body += _format_markers(markers, 238, 180, 74)
     with path.open("w", encoding="ascii", newline="\n") as output:
-        output.write("ply\nformat ascii 1.0\n")
-        output.write("comment axes north east height_up metres\n")
-        output.write(f"element vertex {len(values) + len(markers)}\n")
-        output.write("property float x\nproperty float y\nproperty float z\n")
-        output.write("property uchar red\nproperty uchar green\nproperty uchar blue\n")
-        output.write("property int semantic_id\nend_header\n")
-        height = -values[:, 2] if len(values) else np.empty(0)
-        lo = float(height.min()) if len(height) else 0.0
-        span = max(0.1, float(height.max()) - lo) if len(height) else 1.0
-        for point, point_height in zip(values, height):
-            ratio = max(0.0, min(1.0, (float(point_height) - lo) / span))
-            output.write(
-                f"{point[0]:.4f} {point[1]:.4f} {-point[2]:.4f} "
-                f"{int(45 + 40 * ratio)} {int(115 + 105 * ratio)} "
-                f"{int(145 + 90 * ratio)} -1\n"
-            )
-        for index, item in enumerate(markers):
-            north, east, down = item["position_ned"]
-            output.write(
-                f"{float(north):.4f} {float(east):.4f} {-float(down):.4f} "
-                f"238 180 74 {index}\n"
-            )
+        output.write(header)
+        output.write(body)
 
 
 def write_pcd(path: Path, points, semantic_objects=()) -> None:
     """Export an ASCII PCD scene in north/east/height-up coordinates."""
     values = np.asarray(points, dtype=np.float32).reshape((-1, 3))
-    markers = [
-        item for item in semantic_objects
-        if isinstance(item, dict) and len(item.get("position_ned", [])) == 3
-    ]
+    markers = _semantic_markers(semantic_objects)
     count = len(values) + len(markers)
     path.parent.mkdir(parents=True, exist_ok=True)
+    header = (
+        "# .PCD v0.7 - Point Cloud Data file format\n"
+        "VERSION 0.7\n"
+        "FIELDS x y z red green blue semantic_id\n"
+        "SIZE 4 4 4 1 1 1 4\n"
+        "TYPE F F F U U U I\n"
+        "COUNT 1 1 1 1 1 1 1\n"
+        f"WIDTH {count}\nHEIGHT 1\n"
+        "VIEWPOINT 0 0 0 1 0 0 0\n"
+        f"POINTS {count}\nDATA ascii\n"
+    )
+    if len(values):
+        red = np.full(len(values), 54, dtype=np.int64)
+        green = np.full(len(values), 154, dtype=np.int64)
+        blue = np.full(len(values), 188, dtype=np.int64)
+        semantic_id = np.full(len(values), -1, dtype=np.int64)
+        body = _format_vertices(
+            values[:, 0], values[:, 1], -values[:, 2], red, green, blue, semantic_id
+        )
+    else:
+        body = ""
+    body += _format_markers(markers, 238, 180, 74)
     with path.open("w", encoding="ascii", newline="\n") as output:
-        output.write("# .PCD v0.7 - Point Cloud Data file format\n")
-        output.write("VERSION 0.7\n")
-        output.write("FIELDS x y z red green blue semantic_id\n")
-        output.write("SIZE 4 4 4 1 1 1 4\n")
-        output.write("TYPE F F F U U U I\n")
-        output.write("COUNT 1 1 1 1 1 1 1\n")
-        output.write(f"WIDTH {count}\nHEIGHT 1\n")
-        output.write("VIEWPOINT 0 0 0 1 0 0 0\n")
-        output.write(f"POINTS {count}\nDATA ascii\n")
-        for point in values:
-            output.write(
-                f"{point[0]:.4f} {point[1]:.4f} {-point[2]:.4f} "
-                "54 154 188 -1\n"
-            )
-        for index, item in enumerate(markers):
-            north, east, down = item["position_ned"]
-            output.write(
-                f"{float(north):.4f} {float(east):.4f} {-float(down):.4f} "
-                f"238 180 74 {index}\n"
-            )
+        output.write(header)
+        output.write(body)

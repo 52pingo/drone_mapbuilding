@@ -4,11 +4,23 @@ from __future__ import annotations
 
 import datetime as dt
 from collections import deque
+import itertools
 import json
 import os
 from pathlib import Path
+import time
 from typing import Sequence
 
+#: How many recent ``frame_*.jpg`` files stay on disk. Must comfortably exceed
+#: the reader's "read latest.json -> parse -> read image" window; at 30 Hz this
+#: is ~1 s of slack.
+DEFAULT_RETAIN = 30
+
+#: Process-wide monotonic counter so concurrent writers never share a temp path.
+_TMP_SEQ = itertools.count()
+
+#: Temp files older than this are assumed to be crash leftovers and are reaped.
+_TMP_STALE_SECONDS = 5.0
 
 class FrameRateMeter:
     """Estimate recent throughput without including model warm-up time."""
@@ -24,7 +36,6 @@ class FrameRateMeter:
             return 0.0
         elapsed = self.samples[-1] - self.samples[0]
         return (len(self.samples) - 1) / elapsed if elapsed > 0.0 else 0.0
-
 
 def detection_payload(detection) -> dict:
     """Convert a Detection-like object to the stable GUI wire schema."""
@@ -42,7 +53,6 @@ def detection_payload(detection) -> dict:
             if getattr(detection, "world_ned", None) is not None else None
         ),
     }
-
 
 def evidence_catalog(events: Sequence[dict]) -> list[dict]:
     """Summarize the first and latest saved evidence for every class."""
@@ -67,7 +77,6 @@ def evidence_catalog(events: Sequence[dict]) -> list[dict]:
         item["last_depth_m"] = event.get("depth_m")
     return [catalog[label] for label in sorted(catalog)]
 
-
 def build_snapshot(
     frame_index: int,
     frame_shape,
@@ -90,7 +99,6 @@ def build_snapshot(
         "semantic_objects": list(semantic_objects),
         "image": image_name,
     }
-
 
 def annotate_live(frame, detections: Sequence, cv2, fps: float, frame_index: int):
     """Render the complete current detection set for the operator view."""
@@ -123,20 +131,99 @@ def annotate_live(frame, detections: Sequence, cv2, fps: float, frame_index: int
     )
     return canvas
 
+def read_latest_snapshot(directory: Path, retries: int = 1) -> tuple[dict, bytes]:
+    """Read ``latest.json`` plus its frame image, retrying a raced deletion.
+
+    The writer commits the JPEG before the JSON, so a reader that wins the race
+    against the retention sweep can still observe a missing image. One retry
+    re-reads the (now newer) manifest instead of raising ``FileNotFoundError``.
+    """
+    directory = Path(directory)
+    for attempt in range(retries + 1):
+        try:
+            snapshot = json.loads((directory / "latest.json").read_text("utf-8"))
+            image = (directory / str(snapshot["image"])).read_bytes()
+            return snapshot, image
+        except FileNotFoundError:
+            if attempt >= retries:
+                raise
+    raise AssertionError("unreachable")
 
 class LiveFrameWriter:
     """Commit JPEG first and JSON last so readers see complete frames."""
 
-    def __init__(self, directory: Path, cv2) -> None:
+    def __init__(self, directory: Path, cv2, retain: int = DEFAULT_RETAIN) -> None:
+        if retain < 1:
+            raise ValueError("retain must be at least 1")
         self.directory = directory
         self.cv2 = cv2
+        self.retain = int(retain)
         self.directory.mkdir(parents=True, exist_ok=True)
+        # In-memory mirror of the on-disk frame window: append on publish,
+        # popleft + unlink on overflow. No glob()/sorted() in the hot path.
+        self._live_frames: deque[str] = deque()
+        self._live_names: set[str] = set()
+        self._reap_stale_temporaries()
+        self._seed_from_disk()
 
     @staticmethod
     def _replace_bytes(path: Path, payload: bytes) -> None:
-        temporary = path.with_name(path.name + ".tmp")
-        temporary.write_bytes(payload)
-        os.replace(temporary, path)
+        """Atomically swap ``path`` for ``payload`` via a writer-unique temp."""
+        temporary = path.with_name(
+            f"{path.name}.{os.getpid()}.{next(_TMP_SEQ)}.tmp"
+        )
+        try:
+            temporary.write_bytes(payload)
+            os.replace(temporary, path)
+        except BaseException:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+            raise
+
+    def _reap_stale_temporaries(self) -> None:
+        """Drop ``*.tmp`` left behind by a crashed writer.
+
+        Only files older than ``_TMP_STALE_SECONDS`` are removed so a live
+        concurrent writer's in-flight temp is never yanked out from under it.
+        """
+        cutoff = time.time() - _TMP_STALE_SECONDS
+        for stale in self.directory.glob("*.tmp"):
+            try:
+                if stale.stat().st_mtime < cutoff:
+                    stale.unlink()
+            except OSError:
+                pass
+
+    def _seed_from_disk(self) -> None:
+        """Adopt pre-existing frames once at construction, then trim to retain."""
+        for name in sorted(path.name for path in self.directory.glob("frame_*.jpg")):
+            self._live_frames.append(name)
+            self._live_names.add(name)
+        self._trim()
+
+    def _trim(self) -> None:
+        while len(self._live_frames) > self.retain:
+            stale = self._live_frames.popleft()
+            self._live_names.discard(stale)
+            try:
+                (self.directory / stale).unlink()
+            except OSError:
+                pass
+
+    def _track(self, image_name: str) -> None:
+        """Record a freshly written frame and evict the oldest beyond retain."""
+        if image_name in self._live_names:
+            # Same frame_index republished: move it to the back, keep one entry.
+            try:
+                self._live_frames.remove(image_name)
+            except ValueError:
+                pass
+        else:
+            self._live_names.add(image_name)
+        self._live_frames.append(image_name)
+        self._trim()
 
     def publish(self, frame, detections, events, frame_index: int, fps: float,
                 semantic_objects=()) -> None:
@@ -156,8 +243,4 @@ class LiveFrameWriter:
             self.directory / "latest.json",
             json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
         )
-        for old_frame in sorted(self.directory.glob("frame_*.jpg"))[:-3]:
-            try:
-                old_frame.unlink()
-            except OSError:
-                pass
+        self._track(image_name)

@@ -20,6 +20,39 @@ ROUTE_SOURCE = (
 ENVIRONMENT = sys.argv[4] if len(sys.argv) > 4 else "AirSim"
 
 
+# 日志列索引: t action x y z vx vy vz decision ...
+COL_TIME = 0
+COL_ACTION = 1
+COL_NORTH = 2
+COL_EAST = 3
+COL_ALT = 4
+COL_VX = 5
+COL_VY = 6
+COL_VZ = 7
+COL_DECISION = 8
+MIN_COLUMNS = COL_DECISION + 1
+
+
+def _parse_row(parts):
+    """把一行日志字段解析成 tuple；字段不够或数字坏掉时返回 None。"""
+    if len(parts) < MIN_COLUMNS:
+        return None
+    try:
+        return (
+            float(parts[COL_TIME]),
+            parts[COL_ACTION],
+            float(parts[COL_NORTH]),
+            float(parts[COL_EAST]),
+            float(parts[COL_ALT]),
+            float(parts[COL_VX]),
+            float(parts[COL_VY]),
+            float(parts[COL_VZ]),
+            parts[COL_DECISION],
+        )
+    except ValueError:
+        return None
+
+
 def load_waypoints(source):
     # 要么是 QGC 导出的 json，要么是 "n,e;n,e;..." 这种手写串
     if source.lower().endswith(".json"):
@@ -34,41 +67,32 @@ def load_waypoints(source):
 
 WAYPOINTS = load_waypoints(ROUTE_SOURCE)
 
-# 日志每行: t action x y z vx vy vz decision ...，只留前 9 列
 ROWS = []
-with open(LOG_PATH, encoding="utf-8") as flight_log:
+with open(LOG_PATH, encoding="utf-8-sig") as flight_log:
     for line in flight_log:
         if line.startswith("#"):
             continue
-        parts = line.split()
-        if len(parts) < 13:
-            continue
-        ROWS.append(
-            (
-                float(parts[0]),   # t
-                parts[1],          # action
-                float(parts[2]),   # x
-                float(parts[3]),   # y
-                float(parts[4]),   # z
-                float(parts[5]),   # vx
-                float(parts[6]),   # vy
-                float(parts[7]),   # vz
-                parts[8],          # decision
-            )
-        )
+        row = _parse_row(line.split())
+        if row is not None:
+            ROWS.append(row)
 
-NAVIGATION = [row for row in ROWS if row[1] == "NAVIGATE"]
+NAVIGATION = [row for row in ROWS if row[COL_ACTION] == "NAVIGATE"]
 print(f"rows={len(ROWS)} navigate={len(NAVIGATION)}")
 if not NAVIGATION:
     raise SystemExit("No NAVIGATE rows found in the flight log")
 
 print("--- action counts (NAVIGATE) ---")
-for action, count in collections.Counter(row[8] for row in NAVIGATION).most_common():
+for action, count in collections.Counter(
+    row[COL_DECISION] for row in NAVIGATION
+).most_common():
     print(f"  {action:<10} {count}")
 
-start_time = NAVIGATION[0][0]
+start_time = NAVIGATION[0][COL_TIME]
 print("--- key events ---")
-print("  start  : t=%.0fs pos=(%.1f,%.1f)" % (0.0, NAVIGATION[0][2], NAVIGATION[0][3]))
+print(
+    "  start  : t=%.0fs pos=(%.1f,%.1f)"
+    % (0.0, NAVIGATION[0][COL_NORTH], NAVIGATION[0][COL_EAST])
+)
 print("  route  : " + " -> ".join("(%g,%g)" % wp for wp in WAYPOINTS))
 
 # 对每个航点找时间上最近的经过点；搜索指针只往前走，避免来回匹配
@@ -78,11 +102,13 @@ for index, waypoint in enumerate(WAYPOINTS):
     remaining = mission_rows[search_start:]
     closest = min(
         remaining,
-        key=lambda row: (row[2] - waypoint[0]) ** 2 + (row[3] - waypoint[1]) ** 2,
+        key=lambda row: (row[COL_NORTH] - waypoint[0]) ** 2
+        + (row[COL_EAST] - waypoint[1]) ** 2,
     )
     search_start += remaining.index(closest) + 1
     distance = (
-        (closest[2] - waypoint[0]) ** 2 + (closest[3] - waypoint[1]) ** 2
+        (closest[COL_NORTH] - waypoint[0]) ** 2
+        + (closest[COL_EAST] - waypoint[1]) ** 2
     ) ** 0.5
     print(
         "  wp%d (%.0f,%.0f): closest t=%.0fs pos=(%.1f,%.1f) dist=%.1f"
@@ -90,21 +116,21 @@ for index, waypoint in enumerate(WAYPOINTS):
             index + 1,
             waypoint[0],
             waypoint[1],
-            closest[0] - start_time,
-            closest[2],
-            closest[3],
+            closest[COL_TIME] - start_time,
+            closest[COL_NORTH],
+            closest[COL_EAST],
             distance,
         )
     )
 print(
     "  final  : t=%.0fs pos=(%.1f,%.1f)"
     % (
-        mission_rows[-1][0] - start_time,
-        mission_rows[-1][2],
-        mission_rows[-1][3],
+        mission_rows[-1][COL_TIME] - start_time,
+        mission_rows[-1][COL_NORTH],
+        mission_rows[-1][COL_EAST],
     )
 )
-print("  elapsed: %.0fs" % (mission_rows[-1][0] - start_time))
+print("  elapsed: %.0fs" % (mission_rows[-1][COL_TIME] - start_time))
 
 # 每种 action 一个颜色，图例里给个能看懂的名字
 COLORS = {
@@ -123,25 +149,31 @@ COLORS = {
 
 figure, axes = plt.subplots(figsize=(9, 8))
 axes.plot(
-    [row[2] for row in NAVIGATION],
-    [row[3] for row in NAVIGATION],
+    [row[COL_NORTH] for row in NAVIGATION],
+    [row[COL_EAST] for row in NAVIGATION],
     "-",
     color="#b0bec5",
     linewidth=1.2,
     zorder=1,
 )
 
-# 每个 action 只在图例里出现一次，散点照常全画
-seen = set()
+# 按 action 分组：每个 action 只调一次 scatter，artist 数与 action 种类同阶
+grouped = collections.OrderedDict()
 for row in NAVIGATION:
-    action = row[8]
+    grouped.setdefault(row[COL_DECISION], []).append(row)
+for action, rows in grouped.items():
     color, label = COLORS.get(action, ("#90a4ae", action))
-    if action not in seen:
-        axes.scatter([], [], color=color, s=26, label=label)
-        seen.add(action)
-    axes.scatter(row[2], row[3], color=color, s=13, zorder=2)
+    # 空 scatter 只用于图例，保持原 s=26 的图例标记大小
+    axes.scatter([], [], color=color, s=26, label=label)
+    axes.scatter(
+        [row[COL_NORTH] for row in rows],
+        [row[COL_EAST] for row in rows],
+        color=color,
+        s=13,
+        zorder=2,
+    )
 
-origin = (NAVIGATION[0][2], NAVIGATION[0][3])
+origin = (NAVIGATION[0][COL_NORTH], NAVIGATION[0][COL_EAST])
 route_points = [origin, *WAYPOINTS]
 axes.plot(
     [waypoint[0] for waypoint in route_points],
