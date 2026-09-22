@@ -36,6 +36,7 @@ from hw_insight.avoid_vfh import (
     compute_vfh_motion,
 )
 from hw_insight.avoid_planner import OccupancyGridPlanner, select_subgoal
+from hw_insight.depth_health import is_depth_sensor_suspect, sector_minima
 from hw_insight.mission_safety import is_landed_candidate, should_request_disarm
 from hw_insight.mission_control import decide_control
 
@@ -84,6 +85,10 @@ class AvoidNode(Node):
         self.declare_parameter('arrive_dist', 2.0)
         self.declare_parameter('max_mission_time', 300.0)
         self.declare_parameter('stop_progress_time', 20.0)
+        # 深度传感器失效检测：连续多少帧「整幅近乎常数」才判定失效
+        self.declare_parameter('sensor_suspect_confirm', 10)
+        # 失效持续这么久（秒）就直接降落，不再干等到全局任务超时
+        self.declare_parameter('sensor_fail_timeout', 45.0)
         self.declare_parameter('flight_log', '/home/hw/logs/avoid_flight.log')
         self.declare_parameter('capture_dir', '/home/hw/logs/depth_captures')
 
@@ -266,6 +271,16 @@ class AvoidNode(Node):
         self.tick = 0
         self.best_dist = 1e9
         self.best_dist_t = time.time()
+
+        # 深度传感器失效检测：整幅有效深度近乎常数就判为「没有真实几何」。
+        # 连续这么多帧都如此才生效，避免单帧异常误判。
+        self.sensor_suspect_count = 0
+        self.sensor_suspect_confirm = int(
+            self.get_parameter('sensor_suspect_confirm').value)
+        # 失效持续超过这个秒数就直接降落，不再等全局任务超时
+        self.sensor_fail_timeout = float(
+            self.get_parameter('sensor_fail_timeout').value)
+        self.sensor_suspect_since = 0.0
         self.cap_t = 0.0
         self.land_cmd_sent = False
         self.land_cmd_t = 0.0
@@ -423,20 +438,33 @@ class AvoidNode(Node):
         }
 
     # ---------- depth metrics ----------
+    def depth_sensor_suspect(self) -> bool:
+        """整幅有效深度近乎常数 -> 传感器没在产出真实几何。
+
+        判据本体在 depth_health 里（纯函数，不依赖 ROS，可单测）。
+        """
+        return is_depth_sensor_suspect(self.depth)
+
     def depth_metrics(self):
         if self.depth is None:
             return 999.0, 999.0, 999.0
-        h, w = self.depth.shape
-        y0, y1 = int(h * 0.20), int(h * 0.80)
-        a = self.depth[y0:y1]
 
-        def mn(x0, x1):
-            v = a[:, x0:x1][np.isfinite(a[:, x0:x1])]
-            return float(v.min()) if v.size else 999.0
-        dc = mn(int(w * 0.35), int(w * 0.65))
-        dl = mn(0, int(w * 0.30))
-        dr = mn(int(w * 0.70), w)
-        return dc, dl, dr
+        # 连续确认若干帧才改变扇区读数。首几帧如实上报，避免单帧异常误判；
+        # 确认后改报 999（无障碍）——报 1.0（贴脸障碍）会让无人机原地卡死。
+        if self.depth_sensor_suspect():
+            self.sensor_suspect_count += 1
+            if (self.sensor_suspect_count == self.sensor_suspect_confirm
+                    and self.state != 'LAND'):
+                self.get_logger().warn(
+                    'depth sensor suspect: valid depths are near-constant '
+                    '(std<0.01); treating sectors as clear. count=%d'
+                    % self.sensor_suspect_count)
+            if self.sensor_suspect_count >= self.sensor_suspect_confirm:
+                return 999.0, 999.0, 999.0
+        else:
+            self.sensor_suspect_count = 0
+
+        return sector_minima(self.depth)
 
     # ---------- publishers ----------
     def publish_heartbeat(self):
@@ -892,6 +920,23 @@ class AvoidNode(Node):
                 'width': int(self.camera_info.width),
                 'height': int(self.camera_info.height),
             }
+
+        # 传感器失效超时：失效状态下原地绕圈没有意义，等够时间就降落。
+        # 实测 CityPark 里深度恒为常数时，无人机原地震荡 1446 秒才因全局任务
+        # 超时放弃；这段时间完全是浪费，而且长时间悬停本身有风险。
+        if self.sensor_suspect_count >= self.sensor_suspect_confirm:
+            if self.sensor_suspect_since <= 0.0:
+                self.sensor_suspect_since = now
+            elif (now - self.sensor_suspect_since > self.sensor_fail_timeout
+                    and self.state not in ('LAND', 'HOVER', 'DONE')):
+                self.get_logger().error(
+                    'depth sensor failed for %.0fs (constant depth, no real '
+                    'geometry) -> landing instead of waiting for mission timeout'
+                    % (now - self.sensor_suspect_since))
+                self.start_landing(now, 'depth sensor failed')
+                return 0.0, 0.0, 0.0, self.last_yaw, 0.0
+        else:
+            self.sensor_suspect_since = 0.0
 
         # Stuck watchdog.
         if dist < self.best_dist - 0.2:
