@@ -21,6 +21,15 @@
         "CameraDepth": {
           "CaptureSettings": [
             {
+              "ImageType": 0,
+              "Width": 640,
+              "Height": 480,
+              "FOV_Degrees": 90,
+              "AutoExposureSpeed": 1000,
+              "MotionBlurAmount": 0,
+              "TargetGamma": 1.0
+            },
+            {
               "ImageType": 2,
               "Width": 400,
               "Height": 300,
@@ -34,31 +43,6 @@
             {
               "Enabled": false,
               "ImageType": 0
-            }
-          ],
-          "Gimbal": {
-            "Stabilization": 0,
-            "Pitch": 0,
-            "Roll": 0,
-            "Yaw": 0
-          },
-          "X": 0,
-          "Y": 0,
-          "Z": -1,
-          "Pitch": 0,
-          "Roll": 0,
-          "Yaw": 0
-        },
-        "CameraRGB": {
-          "CaptureSettings": [
-            {
-              "ImageType": 0,
-              "Width": 640,
-              "Height": 480,
-              "FOV_Degrees": 90,
-              "AutoExposureSpeed": 1000,
-              "MotionBlurAmount": 0,
-              "TargetGamma": 1.0
             }
           ],
           "Gimbal": {
