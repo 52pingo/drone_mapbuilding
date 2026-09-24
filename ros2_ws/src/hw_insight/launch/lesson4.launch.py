@@ -1,6 +1,8 @@
 import os
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from ament_index_python.packages import get_package_share_directory
@@ -108,14 +110,21 @@ def generate_launch_description():
         output='screen'
     )
 
-    # rviz 显示 octomap
+    # rviz 显示 octomap —— 默认**不开**。
+    #
+    # 它把不断增长的八叉图点云一直渲染下去，对一次无头航测是纯开销：既不产出
+    # 交付物（图由 export_semantic_map/render_semantic_map 出），又实打实占内存。
+    # 2026-09-24 的对照测量里，这套负载下整个 WSL 虚拟机在任务中途被关掉，
+    # PX4 和任务一起消失 —— 省下的这块内存是留给那种情况的。
+    # 要看实时地图： ros2 launch ... rviz:=true
     pkg_share = get_package_share_directory('hw_insight')
     octomap_rviz_path = os.path.join(pkg_share, 'rviz/octomap.rviz')
     hw_rviz_octomap_node = Node(
         package='rviz2',
         executable='rviz2',
         name='octomap_rviz2',
-        arguments=['-d', octomap_rviz_path]
+        arguments=['-d', octomap_rviz_path],
+        condition=IfCondition(LaunchConfiguration('rviz'))
     )
 
     airsim_node_launch = IncludeLaunchDescription(
@@ -126,6 +135,9 @@ def generate_launch_description():
     )
 
     ld = LaunchDescription()
+    ld.add_action(DeclareLaunchArgument(
+        'rviz', default_value='false',
+        description='start the OctoMap viewer (off for headless surveys)'))
     ld.add_action(airsim_node_launch)
     ld.add_action(depth_clamp_node)
     ld.add_action(depth_to_points_node)
