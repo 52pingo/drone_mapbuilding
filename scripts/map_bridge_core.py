@@ -9,6 +9,109 @@ import time
 
 import numpy as np
 
+try:  # normal case: imported as ``scripts.map_bridge_core``
+    from scripts.uav_semantic_schema import CLASS_TO_ID
+except ImportError:  # run with ``scripts/`` itself on sys.path
+    from uav_semantic_schema import CLASS_TO_ID
+
+
+# How close an occupancy point must be to a tracked object's centre before it
+# inherits that object's class.  The tracker stores one centre per object, not
+# an extent, so this radius is what stands in for "belongs to that object".
+# Tune it against the acceptance counts, not by taste: too small and trees fail
+# the ">= 200 labelled points" bar, too large and neighbouring classes bleed.
+SEMANTIC_ASSIGN_RADIUS_M = 3.0
+
+# Chunk size for the point-to-object distance sweep.  2.5M points against ~20
+# objects is 50M float32 distances if done in one shot; blocking keeps the
+# temporary under a few tens of MB.
+_SEMANTIC_CHUNK = 200_000
+
+# Deliberately off the blue/teal height ramp, so a tagged point reads as tagged
+# at a glance in the exported cloud.
+SEMANTIC_CLASS_COLORS = {
+    "tree": (58, 138, 62),
+    "shrub": (34, 92, 46),
+    "building": (156, 156, 162),
+    "fence": (216, 186, 62),
+    "pole": (130, 128, 124),
+    "playground_equipment": (206, 118, 54),
+    "bench": (150, 104, 66),
+    "barrier": (196, 92, 52),
+    "rock": (110, 108, 104),
+    "bridge": (120, 130, 150),
+}
+SEMANTIC_FALLBACK_COLOR = (198, 88, 150)
+
+
+def _class_id_for_label(label) -> int:
+    """Map a tracker label onto the shared class schema; -1 when unknown."""
+    if not isinstance(label, str):
+        return -1
+    return int(CLASS_TO_ID.get(label, -1))
+
+
+def _class_color_for_label(label):
+    if label in SEMANTIC_CLASS_COLORS:
+        return SEMANTIC_CLASS_COLORS[label]
+    return SEMANTIC_FALLBACK_COLOR
+
+
+def _labeled_objects(semantic_objects):
+    """Collect (class_id, colour, centre) for objects we can actually place."""
+    collected = []
+    for item in semantic_objects:
+        if not isinstance(item, dict):
+            continue
+        position = item.get("position_ned")
+        if not isinstance(position, (list, tuple)) or len(position) != 3:
+            continue
+        class_id = _class_id_for_label(item.get("label"))
+        if class_id < 0:
+            continue
+        try:
+            centre = [float(value) for value in position]
+        except (TypeError, ValueError):
+            continue
+        collected.append((
+            class_id,
+            _class_color_for_label(item.get("label")),
+            centre,
+        ))
+    return collected
+
+
+def assign_semantic_ids(points, semantic_objects, radius=None) -> np.ndarray:
+    """Label each point with the class of the nearest tracked object.
+
+    ``points`` and the objects' ``position_ned`` must share a frame -- both are
+    PX4 local NED here.  Points farther than ``radius`` from every object keep
+    -1, i.e. "occupancy only".  Ties go to the nearest centre; when a point is
+    equidistant the lowest object index wins, which keeps the output stable.
+    """
+    values = np.asarray(points, dtype=np.float32).reshape((-1, 3))
+    ids = np.full(len(values), -1, dtype=np.int64)
+    objects = _labeled_objects(semantic_objects)
+    if not len(values) or not objects:
+        return ids
+
+    limit = SEMANTIC_ASSIGN_RADIUS_M if radius is None else float(radius)
+    if limit <= 0.0:
+        raise ValueError("semantic radius must be positive")
+
+    centres = np.asarray([item[2] for item in objects], dtype=np.float32)
+    class_ids = np.asarray([item[0] for item in objects], dtype=np.int64)
+
+    for start in range(0, len(values), _SEMANTIC_CHUNK):
+        block = values[start:start + _SEMANTIC_CHUNK]
+        delta = block[:, None, :] - centres[None, :, :]
+        distance = np.sqrt(np.einsum("ijk,ijk->ij", delta, delta))
+        nearest = distance.argmin(axis=1)
+        rows = np.arange(len(block))
+        close = distance[rows, nearest] <= limit
+        ids[start + rows[close]] = class_ids[nearest[close]]
+    return ids
+
 
 def world_enu_to_ned(points) -> np.ndarray:
     """Convert AirSim ROS world ENU xyz into PX4 local NED xyz."""
@@ -25,6 +128,37 @@ def world_enu_to_local_ned(points, world_origin_ned=(0.0, 0.0, 0.0)) -> np.ndarr
     converted = world_enu_to_ned(points)
     origin = np.asarray(world_origin_ned, dtype=np.float32).reshape(3)
     return (converted - origin).astype(np.float32, copy=False)
+
+
+def world_ned_to_local_ned(points, world_origin_ned=(0.0, 0.0, 0.0)) -> np.ndarray:
+    """Shift world NED points into PX4 local NED.
+
+    No axis swap and no sign flip: the cloud is already north/east/down, only
+    the origin moves.  Running it through the ENU path instead transposes the
+    map, which is invisible in the point count but puts every point in the
+    wrong place on the ground.
+    """
+    values = np.asarray(points, dtype=np.float32).reshape((-1, 3))
+    origin = np.asarray(world_origin_ned, dtype=np.float32).reshape(3)
+    return (values - origin).astype(np.float32, copy=False)
+
+
+def frame_to_local_ned(points, frame_id, world_origin_ned=(0.0, 0.0, 0.0)
+                       ) -> np.ndarray:
+    """Convert a cloud expressed in ``frame_id`` into PX4 local NED.
+
+    Picks the conversion from the frame name instead of assuming ENU.  An
+    unrecognised frame raises rather than guessing: silently applying the wrong
+    handedness produces a plausible-looking map in the wrong place, which is
+    exactly the bug this replaces.
+    """
+    name = (frame_id or "").strip().lower().lstrip("/")
+    if name.endswith("enu"):
+        return world_enu_to_local_ned(points, world_origin_ned)
+    if name.endswith("ned"):
+        return world_ned_to_local_ned(points, world_origin_ned)
+    raise ValueError(
+        f"map snapshot frame must end in 'enu' or 'ned', got {frame_id!r}")
 
 
 def finite_downsample(points, max_points: int) -> np.ndarray:
@@ -77,15 +211,23 @@ def _format_vertices(x, y, z, red, green, blue, semantic_id) -> str:
 
 
 def _format_markers(markers, red: int, green: int, blue: int) -> str:
-    """Render semantic marker rows; markers are few so a loop is fine."""
+    """Render semantic marker rows; markers are few so a loop is fine.
+
+    The semantic_id column carries the marker's *class* id, not its index.
+    Index ids used to be written here, which collided head-on with the class
+    ids used for occupancy points: a marker at index 9 was indistinguishable
+    from a real tree (``CLASS_TO_ID["tree"] == 9``) and inflated the
+    per-class acceptance counts.  Individual objects stay addressable through
+    ``semantic_objects.json``, which lists every marker with its own id.
+    """
     if not markers:
         return ""
     rows = []
-    for index, item in enumerate(markers):
+    for item in markers:
         north, east, down = item["position_ned"]
         rows.append(
             f"{float(north):.4f} {float(east):.4f} {-float(down):.4f} "
-            f"{red} {green} {blue} {index}\n"
+            f"{red} {green} {blue} {_class_id_for_label(item.get('label'))}\n"
         )
     return "".join(rows)
 
@@ -146,14 +288,14 @@ class MapSnapshotWriter:
 
     def publish(
         self,
-        world_enu_points,
+        points_in,
         frame_id: str = "world_enu",
         world_origin_ned=(0.0, 0.0, 0.0),
     ) -> dict:
         self.sequence += 1
-        original_count = len(world_enu_points)
+        original_count = len(points_in)
         points = finite_downsample(
-            world_enu_to_local_ned(world_enu_points, world_origin_ned),
+            frame_to_local_ned(points_in, frame_id, world_origin_ned),
             self.max_points,
         )
         name = f"points_{self.sequence:06d}.npy"
@@ -231,8 +373,13 @@ def read_snapshot(directory, retries: int = 5, retry_delay: float = 0.01):
     raise FileNotFoundError(directory / "latest.json")
 
 
-def write_ply(path: Path, points, semantic_objects=()) -> None:
-    """Export occupancy and semantic marker vertices in N/E/height-up axes."""
+def write_ply(path: Path, points, semantic_objects=(), semantic_radius=None) -> None:
+    """Export occupancy and semantic marker vertices in N/E/height-up axes.
+
+    Occupancy points near a tracked object are tagged with that object's class
+    id and painted in the class colour; everything else keeps the height ramp
+    and a semantic_id of -1.
+    """
     values = np.asarray(points, dtype=np.float32).reshape((-1, 3))
     markers = _semantic_markers(semantic_objects)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -253,7 +400,18 @@ def write_ply(path: Path, points, semantic_objects=()) -> None:
         red = (45.0 + 40.0 * ratio).astype(np.int64)
         green = (115.0 + 105.0 * ratio).astype(np.int64)
         blue = (145.0 + 90.0 * ratio).astype(np.int64)
-        semantic_id = np.full(len(values), -1, dtype=np.int64)
+        semantic_id = assign_semantic_ids(values, semantic_objects, semantic_radius)
+        tagged = semantic_id >= 0
+        if tagged.any():
+            palette = {}
+            for object_id, color, _ in _labeled_objects(semantic_objects):
+                palette.setdefault(object_id, color)
+            keys = np.asarray(sorted(palette), dtype=np.int64)
+            table = np.asarray([palette[int(key)] for key in keys], dtype=np.int64)
+            picked = table[np.searchsorted(keys, semantic_id[tagged])]
+            red[tagged] = picked[:, 0]
+            green[tagged] = picked[:, 1]
+            blue[tagged] = picked[:, 2]
         body = _format_vertices(
             values[:, 0], values[:, 1], -values[:, 2], red, green, blue, semantic_id
         )
@@ -265,7 +423,7 @@ def write_ply(path: Path, points, semantic_objects=()) -> None:
         output.write(body)
 
 
-def write_pcd(path: Path, points, semantic_objects=()) -> None:
+def write_pcd(path: Path, points, semantic_objects=(), semantic_radius=None) -> None:
     """Export an ASCII PCD scene in north/east/height-up coordinates."""
     values = np.asarray(points, dtype=np.float32).reshape((-1, 3))
     markers = _semantic_markers(semantic_objects)
@@ -286,7 +444,18 @@ def write_pcd(path: Path, points, semantic_objects=()) -> None:
         red = np.full(len(values), 54, dtype=np.int64)
         green = np.full(len(values), 154, dtype=np.int64)
         blue = np.full(len(values), 188, dtype=np.int64)
-        semantic_id = np.full(len(values), -1, dtype=np.int64)
+        semantic_id = assign_semantic_ids(values, semantic_objects, semantic_radius)
+        tagged = semantic_id >= 0
+        if tagged.any():
+            palette = {}
+            for object_id, color, _ in _labeled_objects(semantic_objects):
+                palette.setdefault(object_id, color)
+            keys = np.asarray(sorted(palette), dtype=np.int64)
+            table = np.asarray([palette[int(key)] for key in keys], dtype=np.int64)
+            picked = table[np.searchsorted(keys, semantic_id[tagged])]
+            red[tagged] = picked[:, 0]
+            green[tagged] = picked[:, 1]
+            blue[tagged] = picked[:, 2]
         body = _format_vertices(
             values[:, 0], values[:, 1], -values[:, 2], red, green, blue, semantic_id
         )

@@ -3,9 +3,18 @@ import json
 import numpy as np
 
 from scripts.map_bridge_core import (
-    MapSnapshotWriter, finite_downsample, world_enu_to_local_ned,
-    world_enu_to_ned, write_pcd, write_ply,
+    MapSnapshotWriter, assign_semantic_ids, finite_downsample,
+    frame_to_local_ned, world_enu_to_local_ned, world_enu_to_ned,
+    world_ned_to_local_ned, write_pcd, write_ply,
 )
+from scripts.uav_semantic_schema import CLASS_TO_ID
+
+
+def _body(path):
+    """Return the vertex rows of an exported cloud, header stripped."""
+    text = path.read_text(encoding="ascii")
+    return [line for line in text.splitlines()
+            if line and line[0].isdigit() or line.startswith("-")]
 
 
 def test_world_enu_to_px4_ned_swaps_xy_and_flips_z():
@@ -39,6 +48,41 @@ def test_snapshot_writer_rotates_three_atomic_npy_files(tmp_path):
     assert points.shape == (5, 3)
 
 
+def test_world_ned_to_local_ned_only_moves_the_origin():
+    """A NED cloud must keep north on x; swapping it transposes the map."""
+    points = world_ned_to_local_ned([[10.0, 20.0, -30.0]], [1.0, 2.0, 3.0])
+    np.testing.assert_allclose(points, [[9.0, 18.0, -33.0]])
+
+
+def test_frame_dispatch_picks_the_conversion_from_the_frame_name():
+    values = [[1.0, 2.0, -3.0]]
+    np.testing.assert_allclose(frame_to_local_ned(values, "world_ned"),
+                               [[1.0, 2.0, -3.0]])
+    np.testing.assert_allclose(frame_to_local_ned(values, "world_enu"),
+                               [[2.0, 1.0, 3.0]])
+    np.testing.assert_allclose(frame_to_local_ned(values, "/world_ned"),
+                               [[1.0, 2.0, -3.0]])
+
+
+def test_unknown_frame_raises_instead_of_guessing():
+    """Guessing the handedness is how the map ended up transposed."""
+    import pytest
+    with pytest.raises(ValueError, match="must end in 'enu' or 'ned'"):
+        frame_to_local_ned([[1, 2, 3]], "map")
+
+
+def test_snapshot_of_a_world_ned_cloud_keeps_xy_meaning(tmp_path):
+    """Regression: the writer used to swap x/y for every cloud regardless."""
+    writer = MapSnapshotWriter(tmp_path, max_points=10)
+    writer.publish([[100.0, -50.0, -12.0]], frame_id="world_ned",
+                   world_origin_ned=(7.0, 3.0, -1.5))
+    metadata = json.loads((tmp_path / "latest.json").read_text(encoding="utf-8"))
+    points = np.load(tmp_path / metadata["points"], allow_pickle=False)
+    np.testing.assert_allclose(points, [[93.0, -53.0, -10.5]])
+    assert metadata["source_frame"] == "world_ned"
+    assert metadata["coordinate_frame"] == "px4_local_ned"
+
+
 def test_ply_export_includes_occupancy_and_semantic_vertices(tmp_path):
     target = tmp_path / "semantic_map.ply"
     write_ply(target, [[1, 2, -3]], [{
@@ -58,4 +102,73 @@ def test_pcd_export_includes_semantic_marker(tmp_path):
     text = target.read_text(encoding="ascii")
     assert "FIELDS x y z red green blue semantic_id" in text
     assert "POINTS 2" in text
-    assert "4.0000 5.0000 6.0000 238 180 74 0" in text
+    assert (f"4.0000 5.0000 6.0000 238 180 74 {CLASS_TO_ID['tree']}" in text)
+
+
+def test_markers_carry_their_class_id_not_their_index():
+    """An index id would collide with a real class id and inflate its count."""
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as scratch:
+        target = Path(scratch) / "m.ply"
+        write_ply(target, [], [
+            {"label": "fence", "position_ned": [1, 1, 1]},
+            {"label": "tree", "position_ned": [2, 2, 2]},
+        ])
+        rows = _body(target)
+    assert rows[0].endswith(str(CLASS_TO_ID["fence"]))
+    assert rows[1].endswith(str(CLASS_TO_ID["tree"]))
+    assert rows[1].endswith("0") is False
+
+
+def test_assign_semantic_ids_labels_only_points_inside_the_radius():
+    points = [
+        [0.0, 0.0, 0.0],      # 0 m from the tree centre
+        [2.0, 0.0, 0.0],      # 2 m -> inside the 3 m default
+        [4.0, 0.0, 0.0],      # 4 m -> outside
+    ]
+    objects = [{"label": "tree", "position_ned": [0.0, 0.0, 0.0]}]
+    ids = assign_semantic_ids(points, objects)
+    assert ids.tolist() == [CLASS_TO_ID["tree"], CLASS_TO_ID["tree"], -1]
+
+
+def test_assign_semantic_ids_prefers_the_nearest_object():
+    points = [[10.0, 0.0, 0.0]]
+    objects = [
+        {"label": "tree", "position_ned": [0.0, 0.0, 0.0]},
+        {"label": "fence", "position_ned": [10.5, 0.0, 0.0]},
+    ]
+    assert assign_semantic_ids(points, objects).tolist() == [CLASS_TO_ID["fence"]]
+
+
+def test_assign_semantic_ids_ignores_unplaceable_and_unknown_objects():
+    points = [[0.0, 0.0, 0.0]]
+    objects = [
+        {"label": "tree"},                              # no position
+        {"label": "tree", "position_ned": None},        # null position
+        {"label": "unicorn", "position_ned": [0, 0, 0]},  # not in the schema
+    ]
+    assert assign_semantic_ids(points, objects).tolist() == [-1]
+
+
+def test_assign_semantic_ids_rejects_a_nonpositive_radius():
+    import pytest
+    with pytest.raises(ValueError):
+        assign_semantic_ids([[0, 0, 0]],
+                            [{"label": "tree", "position_ned": [0, 0, 0]}], 0.0)
+
+
+def test_ply_tags_nearby_occupancy_points_with_the_class_colour(tmp_path):
+    target = tmp_path / "semantic_map.ply"
+    write_ply(target, [[0.0, 0.0, 0.0], [50.0, 50.0, 0.0]],
+              [{"label": "tree", "position_ned": [0.0, 0.0, 0.0]}])
+    rows = _body(target)
+    near, far = rows[0], rows[1]
+
+    def semantic_id(row):
+        return int(row.rsplit(" ", 1)[1])
+
+    assert semantic_id(near) == CLASS_TO_ID["tree"]
+    assert semantic_id(far) == -1
+    # The tagged point is painted in the class colour, not the height ramp.
+    assert near.split()[3:6] == ["58", "138", "62"]
