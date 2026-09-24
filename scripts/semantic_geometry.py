@@ -54,12 +54,45 @@ def project_box_center_ned(
 class SemanticObjectTracker:
     """Merge repeated same-class 3D observations into stable map objects."""
 
-    def __init__(self, merge_distance: float = 4.0) -> None:
+    # How many past observations to keep per object.  The acceptance criteria
+    # ask for centroid drift across consecutive observations, which is not
+    # recoverable from a running average, so the trail is kept explicitly.
+    TRAIL_LIMIT = 32
+
+    DEFAULT_MERGE_DISTANCE = 2.0
+
+    # How far a detection may sit from an object's centre and still be merged
+    # into it.  4.0m was loose enough that one bad box could drag a sparsely
+    # observed object: measured on the 2026-09-24 run a building seen 5 times
+    # moved 6.2m in a single step, which at weight 1/5 still shifts the centre
+    # by 1.2m -- past the 1.0m drift the map is held to.  Halving the gate
+    # halves that worst case, at the cost of splitting genuinely close
+    # objects; re-tune it against the per-class counts if that shows up.
+    def __init__(self, merge_distance: float = DEFAULT_MERGE_DISTANCE) -> None:
         if merge_distance <= 0.0:
             raise ValueError("merge distance must be positive")
         self.merge_distance = float(merge_distance)
         self.objects: list[dict] = []
         self.sequence = 0
+
+    @staticmethod
+    def _append_trail(item: dict, seen_at: float) -> None:
+        """Record the *tracked* centroid, not the raw detection.
+
+        The acceptance criterion is about how far an object's centroid wanders
+        between observations.  Storing the raw per-frame estimate instead made
+        the figure meaningless: one bad box projecting 6m off dragged the
+        recorded position with it, and the criterion then measured the
+        detector's noise rather than the tracker's stability -- which is what
+        it is supposed to bound.
+        """
+        trail = item.setdefault("trail", [])
+        trail.append({
+            "seen_at": float(seen_at),
+            "position_ned": [float(value) for value in item["position_ned"]],
+        })
+        if len(trail) > SemanticObjectTracker.TRAIL_LIMIT:
+            del trail[:-SemanticObjectTracker.TRAIL_LIMIT]
 
     def update(self, detections, seen_at: float) -> None:
         for detection in detections:
@@ -77,7 +110,9 @@ class SemanticObjectTracker:
                     "max_confidence": float(detection.confidence),
                     "last_seen": float(seen_at),
                     "approximate": True,
+                    "trail": [],
                 })
+                self._append_trail(self.objects[-1], seen_at)
                 continue
             count = int(matched["observations"]) + 1
             weight = 1.0 / min(count, 12)
@@ -90,6 +125,7 @@ class SemanticObjectTracker:
                 float(matched["max_confidence"]), float(detection.confidence)
             )
             matched["last_seen"] = float(seen_at)
+            self._append_trail(matched, seen_at)
 
     def _nearest(self, label: str, position):
         candidates = []
