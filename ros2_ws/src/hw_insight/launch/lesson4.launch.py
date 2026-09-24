@@ -18,7 +18,9 @@ def generate_launch_description():
             ('image_in', '/airsim_node/PX4/CameraDepth/DepthPerspective'),
             ('image_out', '/depth/clamped')
         ],
-        parameters=[{'max_depth': 25.0}],
+        # max_depth 25.0 -> 30.0：相机俯角改成 -40° 后，15m 巡航高度上
+        # 地面落在 15~25m 的斜距带里，25m 的钳位把最远的一段地面也切了。
+        parameters=[{'max_depth': 30.0}],
         output='screen'
     )
 
@@ -77,18 +79,30 @@ def generate_launch_description():
         executable='octomap_server_node',
         name='octomap_server',
         remappings=[('cloud_in', '/depth/points_relay')],
+        # occupancy_min_z/max_z: -2.0/6.0 -> -60.0/20.0。
+        #   这两个是世界系（world_ned，z 为负=向上，与 PX4/AirSim 一致）下的
+        #   插入过滤器，范围外的占据体素直接丢掉。原值 -2..6 是按"地面在
+        #   z=0"的假设随手定的，但实测地面在 z≈-1.4、无人机巡航在 z≈-16.5，
+        #   于是"地面以上 0.6m"以上的东西——树冠、建筑立面、围栏——全被砍掉，
+        #   整张图塌成一层皮。证据：地图 z 的下界 -2.03 与配置值 -2.0 只差
+        #   半个体素，而 91% 的体素挤在 [-1.6, -0.8] 这一层里。
+        #   放宽到 -60..20 覆盖整个飞行包线；先放宽测量真实分布，再按实测收紧。
+        #
+        # sensor_model/max_range: 15.0 -> 25.0，pointcloud_max_z: 15.0 -> 30.0。
+        #   15m 巡航高度下地面斜距本来就在 15~25m，钳到 15m 等于只保留画面
+        #   最下方一小条，地图因此沿航迹断成一串孤立的脚印。
         parameters=[{
             'resolution': 0.15,
             'frame_id': 'world_ned',
-            'sensor_model/max_range': 15.0,
+            'sensor_model/max_range': 25.0,
             'sensor_model/hit': 0.7,
             'sensor_model/miss': 0.4,
             'sensor_model/min': 0.12,
             'sensor_model/max': 0.97,
             'pointcloud_min_z': 0.5,
-            'pointcloud_max_z': 15.0,
-            'occupancy_min_z': -2.0,
-            'occupancy_max_z': 6.0,
+            'pointcloud_max_z': 30.0,
+            'occupancy_min_z': -60.0,
+            'occupancy_max_z': 20.0,
             'latch': True,
         }],
         output='screen'
