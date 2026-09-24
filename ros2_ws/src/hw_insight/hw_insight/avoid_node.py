@@ -37,6 +37,7 @@ from hw_insight.avoid_vfh import (
 )
 from hw_insight.avoid_planner import OccupancyGridPlanner, select_subgoal
 from hw_insight.depth_health import is_depth_sensor_suspect, sector_minima
+from hw_insight.avoid_vfh import apply_recovery_hysteresis
 from hw_insight.mission_safety import is_landed_candidate, should_request_disarm
 from hw_insight.mission_control import decide_control
 
@@ -293,6 +294,9 @@ class AvoidNode(Node):
         self.hover_until = 0.0
         self.recover_until = 0.0
         self.recover_turn = 0.0
+        self.recovery_log_t = 0.0
+        self.last_recovery_theta = None
+        self.recovery_same_dir = 0
         self.rearm_t = 0.0
         self.turn_start_yaw = None
         self.turn_target_yaw = None
@@ -878,6 +882,9 @@ class AvoidNode(Node):
                 self.best_dist = 1e9
                 self.best_dist_t = now
                 self.last_vfh_theta = 0.0
+                # 换了目标就别把上一段的逃逸方向带过来。
+                self.last_recovery_theta = None
+                self.recovery_same_dir = 0
                 self.global_route = []
                 self.action = 'wp%d' % self.goal_idx
                 self.get_logger().info(
@@ -948,15 +955,26 @@ class AvoidNode(Node):
             if now >= self.recover_until:
                 self.recover_until = now + 4.0
                 try:
-                    self.vfh_recovery_theta = best_gap_heading(
+                    candidate_theta = best_gap_heading(
                         self.depth, self.vfh_params, camera_info)
                 except Exception as e:
                     self.get_logger().warn('VFH gap search failed: %s' % e)
-                    self.vfh_recovery_theta = 0.9 if self.dl >= self.dr else -0.9
+                    candidate_theta = 0.9 if self.dl >= self.dr else -0.9
+
+                # 方向滞回：别在一次卡死里被测量噪声左右翻。判定逻辑在
+                # avoid_vfh.apply_recovery_hysteresis（纯函数，单测在 test_vfh.py）。
+                self.vfh_recovery_theta, self.recovery_same_dir = (
+                    apply_recovery_hysteresis(
+                        candidate_theta, self.last_recovery_theta,
+                        self.recovery_same_dir))
+                self.last_recovery_theta = self.vfh_recovery_theta
+
                 self.get_logger().warn(
-                    'STUCK %.0fs (dist=%.1f dc=%.1f dl=%.1f dr=%.1f) -> recovery theta %.2f' % (
+                    'STUCK %.0fs (dist=%.1f dc=%.1f dl=%.1f dr=%.1f) -> recovery theta %.2f '
+                    '(candidate %.2f, same-dir #%d)' % (
                         now - self.best_dist_t, dist, self.dc, self.dl, self.dr,
-                        self.vfh_recovery_theta))
+                        self.vfh_recovery_theta, candidate_theta,
+                        self.recovery_same_dir))
 
         recovery_theta = None
         if now < self.recover_until:
@@ -982,6 +1000,26 @@ class AvoidNode(Node):
         self.action = motion['action']
         self.last_vfh_theta = motion['theta']
         self.dc = motion['dc']
+
+        # 卡死诊断：recovery 期间把「最终航向 / 前进速度 / 净空 / 所有山谷」打出来。
+        #
+        # 为什么要打：一次 2400 秒任务里 89% 的时间在 recover，无人机原地振荡出不去。
+        # 光看 STUCK 日志只能猜到「航向在翻」，但 recovery_theta 是强制航向还是被代价
+        # 函数压回去、以及是不是速度反向导致走了负距离，都区分不出来。这三件事对应
+        # 三种完全不同的修法，所以先量清楚再改。
+        #   theta 在 + 和 - 之间来回 → 山谷选择无滞回，翻向
+        #   forward_speed <= 0      → 强制了航向但速度是倒的，等于原地/倒退
+        #   valleys 里有两个宽度相近的中心 → 印证「两侧皆可通」，选哪个都对，问题在没记忆
+        if (motion['action'] == 'recover'
+                and now - self.recovery_log_t >= 2.0):
+            self.recovery_log_t = now
+            valleys = '; '.join(
+                '%.3f/%.1fw' % (v['centre'], v['width_bins'])
+                for v in (motion.get('valley_info') or [])[:4])
+            self.get_logger().info(
+                'RECOVERY theta=%+.3f fwd=%+.2f clear=%.2f dc=%.1f valleys=[%s]'
+                % (motion['theta'], motion['forward_speed'],
+                   motion['clearance'], motion['dc'], valleys))
 
         # ----- VFH+ behind-goal handling -----
         if motion['action'] == 'turn' and abs(motion['yaw_rate']) > 1e-3:

@@ -5,6 +5,8 @@ import math
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(
     0,
     str(
@@ -17,12 +19,66 @@ sys.path.insert(
 
 from hw_insight.avoid_vfh import (
     VfhParams,
+    apply_recovery_hysteresis,
     binary_histogram,
     blend_corridor_heading,
     build_polar_histogram,
     compute_vfh_motion,
     find_valleys,
+    RECOVERY_FLIP_LIMIT,
 )
+
+
+def test_recovery_hysteresis_ignores_noise_between_neighbouring_gaps():
+    """The case the flight data actually showed.
+
+    Stuck in a gap that is open both ways, best_gap_heading alternated between
+    +0.382 and -0.229 rad -- 0.61 rad apart, i.e. the same side as far as the
+    drone is concerned.  Without hysteresis it turned left for 4s, right for 4s,
+    and oscillated in place 4314 times.
+    """
+    held = 0.382
+    theta, count = apply_recovery_hysteresis(-0.229, held, 0)
+    assert theta == held            # kept the held direction
+    assert count == 1
+
+    # ... and keeps holding it as the noise keeps flipping.
+    for expected in (2, 3):
+        theta, count = apply_recovery_hysteresis(0.382, theta, count)
+        assert theta == held
+        assert count == expected
+
+
+def test_recovery_hysteresis_releases_after_the_flip_limit():
+    """A direction that never helps must eventually be given up."""
+    held = 0.382
+    count = 0
+    for _ in range(RECOVERY_FLIP_LIMIT - 1):
+        held, count = apply_recovery_hysteresis(-0.229, held, count)
+    assert count == RECOVERY_FLIP_LIMIT - 1
+    theta, count = apply_recovery_hysteresis(-0.229, held, count)
+    assert theta == pytest.approx(-0.229)   # released, takes the other side
+    assert count == 0
+
+
+def test_recovery_hysteresis_takes_a_genuinely_new_direction_at_once():
+    """An obstacle appearing on the held side is not noise; switch immediately."""
+    theta, count = apply_recovery_hysteresis(2.0, -0.5, 1)
+    assert theta == pytest.approx(2.0)
+    assert count == 0
+
+
+def test_recovery_hysteresis_first_call_always_takes_the_candidate():
+    theta, count = apply_recovery_hysteresis(0.7, None, 0)
+    assert theta == pytest.approx(0.7)
+    assert count == 0
+
+
+def test_recovery_hysteresis_wraps_across_pi():
+    """-3.0 and +3.0 are 0.28 rad apart, not nearly a full turn."""
+    theta, count = apply_recovery_hysteresis(-3.0, 3.0, 0)
+    assert theta == pytest.approx(3.0)
+    assert count == 1
 import numpy as np
 
 PARAMS = VfhParams(

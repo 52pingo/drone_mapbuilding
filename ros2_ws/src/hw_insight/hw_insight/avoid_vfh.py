@@ -632,3 +632,42 @@ def compute_vfh_motion(
         chosen_theta, fwd, clearance, body_heading, gh, theta_goal,
         action, blocked, thetas, col_min, candidates, valleys
     )
+
+
+# 卡死恢复的方向滞回参数。
+#
+# 实测（2026-09-24，2400 秒任务里 89% 的时间在 recover）：无人机停在一处两侧都
+# 通的空档，best_gap_heading 每次重算选出的最宽山谷在 +0.38 与 -0.23 rad 之间来回
+# 跳，于是 4 秒往左、4 秒往右，原地振荡 4314 次出不去。best_gap_heading 是纯函数、
+# 没有记忆，而两侧山谷宽度相近时，深度噪声、平滑窗口和遍历顺序都足以让结论翻面 ——
+# 翻的是测量噪声，不是环境变了。
+RECOVERY_HYSTERESIS_RAD = math.radians(60.0)
+RECOVERY_FLIP_LIMIT = 4
+
+
+def apply_recovery_hysteresis(
+    candidate_theta: float,
+    held_theta: Optional[float],
+    same_dir_count: int,
+    hysteresis_rad: float = RECOVERY_HYSTERESIS_RAD,
+    flip_limit: int = RECOVERY_FLIP_LIMIT,
+):
+    """Choose the recovery heading, holding a direction until it has had a fair run.
+
+    New candidates within ``hysteresis_rad`` of the held direction are treated as
+    the same side and ignored, so measurement noise cannot flip the drone
+    mid-escape.  A genuinely different direction is taken immediately -- that is
+    an obstacle appearing, not noise -- but if the *same* direction keeps being
+    chosen and the drone still is not making progress after ``flip_limit``
+    attempts, it is released so the drone can try the other side.
+
+    Returns ``(theta, same_dir_count)``.
+    """
+    if held_theta is None:
+        return float(candidate_theta), 0
+    if abs(_wrap_angle(candidate_theta - held_theta)) >= hysteresis_rad:
+        return float(candidate_theta), 0
+    count = int(same_dir_count) + 1
+    if count >= flip_limit:
+        return float(candidate_theta), 0
+    return float(held_theta), count
