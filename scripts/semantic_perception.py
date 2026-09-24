@@ -15,15 +15,34 @@ import time
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 try:
-    from scripts.airsim_compat import import_airsim
+    from scripts.airsim_compat import AirSimLink, import_airsim
     from scripts.perception_live import FrameRateMeter, LiveFrameWriter
     from scripts.semantic_geometry import (
         SemanticObjectTracker, project_box_center_ned,
     )
 except ImportError:
-    from airsim_compat import import_airsim
+    from airsim_compat import AirSimLink, import_airsim
     from perception_live import FrameRateMeter, LiveFrameWriter
     from semantic_geometry import SemanticObjectTracker, project_box_center_ned
+
+
+# How often the tracked objects are flushed to disk while the run is live.
+# The tracker only used to be written on the way out, so any crash discarded
+# the whole session's semantics even though the flight had gone fine.
+CHECKPOINT_SECONDS = 20.0
+
+
+def write_semantic_objects(output_dir: Path, tracker: SemanticObjectTracker) -> None:
+    """Write the tracked objects the same way every time, live or on exit."""
+    payload = {
+        "coordinate_frame": "px4_local_ned",
+        "objects": tracker.snapshot(),
+    }
+    target = output_dir / "semantic_objects.json"
+    temporary = target.with_name(target.name + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temporary, target)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -150,6 +169,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-box-area-ratio", type=float, default=0.0008)
     parser.add_argument("--max-runtime", type=float, default=0.0)
     parser.add_argument("--max-events", type=int, default=0)
+    parser.add_argument(
+        "--merge-distance", type=float,
+        default=SemanticObjectTracker.DEFAULT_MERGE_DISTANCE,
+        help="metres a detection may sit from an object centre and still merge",
+    )
     parser.add_argument("--stop-file", default="")
     parser.add_argument("--live-dir", default="")
     parser.add_argument("--source-image", default="")
@@ -368,15 +392,12 @@ def main() -> int:
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    client = None
+    link = None
     airsim = None
     if not args.source_image:
         airsim = import_airsim(args.airsim_client, args.airsim_rpc_vendor)
-        client = airsim.MultirotorClient()
-        client.confirmConnection()
-        camera_fov = float(
-            client.simGetCameraInfo(args.camera, vehicle_name=args.vehicle).fov
-        )
+        link = AirSimLink(airsim, args.camera, args.vehicle)
+        camera_fov = link.camera_fov()
     else:
         camera_fov = 0.0
 
@@ -384,7 +405,8 @@ def main() -> int:
     started = time.monotonic()
     frame_index = 0
     fps_meter = FrameRateMeter()
-    semantic_tracker = SemanticObjectTracker()
+    semantic_tracker = SemanticObjectTracker(args.merge_distance)
+    last_checkpoint = time.monotonic()
     print(f"semantic perception ready: {weights.name}")
     print(f"classes: {', '.join(str(v) for v in model.names.values())}")
     print(f"evidence -> {output_dir}")
@@ -406,14 +428,14 @@ def main() -> int:
                     raise RuntimeError(f"cannot read source image: {args.source_image}")
                 depth = None
             else:
-                responses = client.simGetImages([
+                responses = link.grab([
                     airsim.ImageRequest(
                         args.camera, airsim.ImageType.Scene, False, True
                     ),
                     airsim.ImageRequest(
                         args.camera, airsim.ImageType.DepthPerspective, True, False
                     ),
-                ], vehicle_name=args.vehicle)
+                ])
                 if len(responses) != 2:
                     raise RuntimeError("AirSim did not return both Scene and Depth")
                 frame = decode_scene(responses[0], cv2, np)
@@ -448,6 +470,11 @@ def main() -> int:
             live_fps = fps_meter.tick(time.monotonic())
             semantic_tracker.update(detections, time.time())
             new_events = tracker.update(detections, time.monotonic())
+
+            checkpoint_at = time.monotonic()
+            if checkpoint_at - last_checkpoint >= CHECKPOINT_SECONDS:
+                last_checkpoint = checkpoint_at
+                write_semantic_objects(output_dir, semantic_tracker)
 
             for detection in new_events:
                 sequence = len(events) + 1
@@ -516,13 +543,7 @@ def main() -> int:
         metadata["frames_processed"] = frame_index
         metadata["class_image_counts"] = dict(sorted(tracker.counts.items()))
         write_summary(output_dir / "summary.json", metadata, events)
-        (output_dir / "semantic_objects.json").write_text(
-            json.dumps({
-                "coordinate_frame": "px4_local_ned",
-                "objects": semantic_tracker.snapshot(),
-            }, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        write_semantic_objects(output_dir, semantic_tracker)
         print(f"semantic perception stopped: frames={frame_index} events={len(events)}")
     return 0
 

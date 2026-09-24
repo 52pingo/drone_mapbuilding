@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 from pathlib import Path
 import ssl
 import sys
@@ -9,6 +10,83 @@ from typing import Optional
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+class AirSimLink:
+    """Keep an AirSim RPC session usable when a response is lost mid-stream.
+
+    The vendored msgpack client appends every byte it reads to an unpacker
+    buffer and only ever consumes complete messages.  When one request fails
+    part way through -- a timeout on a large image, a stalled renderer -- the
+    tail of the abandoned response stays in that buffer, so the next read
+    misparses and the buffer keeps growing.  The process then dies with
+    MemoryError somewhere inside the vendor, and on 2026-09-23 that cost a
+    55-minute perception run every detection it had collected, because the
+    crash landed before any results were written.
+
+    Reconnecting is the only recovery available without patching the vendor:
+    a fresh client starts with an empty buffer.  Callers get a working session
+    back instead of a transport error they cannot act on.
+    """
+
+    def __init__(self, airsim_module, camera: str, vehicle: str = "") -> None:
+        self.airsim = airsim_module
+        self.camera = camera
+        self.vehicle = vehicle
+        self.client = None
+        self.reconnects = 0
+        self.connect()
+
+    def connect(self) -> None:
+        self.release()
+        client = self.airsim.MultirotorClient()
+        client.confirmConnection()
+        self.client = client
+
+    def release(self) -> None:
+        client, self.client = self.client, None
+        if client is None:
+            return
+        for name in ("close", "reset"):
+            method = getattr(client, name, None)
+            if callable(method):
+                try:
+                    method()
+                except Exception:
+                    pass
+                break
+        del client
+        gc.collect()
+
+    def reconnect(self, reason: str) -> None:
+        self.reconnects += 1
+        try:
+            self.connect()
+        except Exception as error:
+            raise RuntimeError(
+                f"AirSim reconnect failed after {reason}: {error}") from error
+        print(f"[airsim] reconnected (reason: {reason}, "
+              f"total {self.reconnects})", flush=True)
+
+    def camera_fov(self) -> float:
+        return float(self.client.simGetCameraInfo(
+            self.camera, vehicle_name=self.vehicle).fov)
+
+    def grab(self, requests, attempts: int = 3):
+        """Fetch images, rebuilding the session if a response is lost."""
+        last = None
+        for attempt in range(1, attempts + 1):
+            try:
+                return self.client.simGetImages(
+                    requests, vehicle_name=self.vehicle)
+            except Exception as error:  # includes MemoryError
+                last = error
+                if attempt == attempts:
+                    break
+                print(f"[airsim] simGetImages failed with "
+                      f"{type(error).__name__}: {error}", flush=True)
+                self.reconnect(type(error).__name__)
+        raise last
 
 
 def resolve_rpc_vendor(requested: str = "") -> Optional[Path]:
