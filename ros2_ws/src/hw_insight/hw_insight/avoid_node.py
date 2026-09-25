@@ -37,6 +37,7 @@ from hw_insight.avoid_vfh import (
 )
 from hw_insight.avoid_planner import OccupancyGridPlanner, select_subgoal
 from hw_insight.depth_health import is_depth_sensor_suspect, sector_minima
+from hw_insight.ground_filter import strip_ground, vertical_fov_deg
 from hw_insight.avoid_vfh import apply_recovery_hysteresis
 from hw_insight.mission_safety import is_landed_candidate, should_request_disarm
 from hw_insight.mission_control import decide_control
@@ -82,6 +83,12 @@ class AvoidNode(Node):
         self.declare_parameter('avoid_front', 10.0)
         self.declare_parameter('avoid_brake', 5.0)
         self.declare_parameter('avoid_near', 2.5)
+        # 相机俯角，必须与 AirSim settings.json 里 CameraDepth 的 Pitch 一致。
+        # ROS 侧拿不到相机位姿（airsim_node 不发布相机 TF），所以只能由参数告诉
+        # 避障：画面每一行对应地面上多远，是 ground_filter 反推离地高度的依据。
+        self.declare_parameter('camera_pitch_deg', -40.0)
+        # 地面滤除的松紧。0 表示不滤（退回旧行为）。
+        self.declare_parameter('ground_margin_ratio', 0.15)
         self.declare_parameter('max_steer', 2.5)
         self.declare_parameter('arrive_dist', 2.0)
         self.declare_parameter('max_mission_time', 300.0)
@@ -145,6 +152,12 @@ class AvoidNode(Node):
         self.avoid_front = float(self.get_parameter('avoid_front').value)
         self.avoid_brake = float(self.get_parameter('avoid_brake').value)
         self.avoid_near = float(self.get_parameter('avoid_near').value)
+        self.camera_pitch_deg = float(
+            self.get_parameter('camera_pitch_deg').value)
+        self.ground_margin_ratio = float(
+            self.get_parameter('ground_margin_ratio').value)
+        self._stripped_source = None
+        self._stripped_depth = None
         self.max_steer = float(self.get_parameter('max_steer').value)
         self.arrive_dist = float(self.get_parameter('arrive_dist').value)
         self.max_mission = float(self.get_parameter('max_mission_time').value)
@@ -449,6 +462,27 @@ class AvoidNode(Node):
         """
         return is_depth_sensor_suspect(self.depth)
 
+    def navigation_depth(self):
+        """去掉地面之后的深度图，供避障使用。
+
+        地面在 VFH 眼里和树干没有区别，而俯角固定、高度可由图像自标定时，每一行
+        对应地面上多远是能算出来的 —— 见 ground_filter 里的实测依据。不滤地面时
+        （ground_margin_ratio<=0）原样返回，退回旧行为。
+        """
+        if self.depth is None:
+            return None
+        if self.ground_margin_ratio <= 0.0:
+            return self.depth
+        if self._stripped_source is self.depth:
+            return self._stripped_depth
+        height, width = self.depth.shape[:2]
+        fov_v = vertical_fov_deg(width, height, self.vfh_params.fov_deg)
+        self._stripped_depth = strip_ground(
+            self.depth, fov_v, self.camera_pitch_deg,
+            margin_ratio=self.ground_margin_ratio)
+        self._stripped_source = self.depth
+        return self._stripped_depth
+
     def depth_metrics(self):
         if self.depth is None:
             return 999.0, 999.0, 999.0
@@ -468,7 +502,7 @@ class AvoidNode(Node):
         else:
             self.sensor_suspect_count = 0
 
-        return sector_minima(self.depth)
+        return sector_minima(self.navigation_depth())
 
     # ---------- publishers ----------
     def publish_heartbeat(self):
@@ -955,8 +989,11 @@ class AvoidNode(Node):
             if now >= self.recover_until:
                 self.recover_until = now + 4.0
                 try:
+                    # 必须和 compute_vfh_motion 用同一张图：那是去地面后的版本。
+                    # 用原始深度的话，recovery 会在一个「地面也是一堵墙」的直方图
+                    # 里找山谷，和随后实际执行的代价函数对「什么算障碍」判断不一致。
                     candidate_theta = best_gap_heading(
-                        self.depth, self.vfh_params, camera_info)
+                        self.navigation_depth(), self.vfh_params, camera_info)
                 except Exception as e:
                     self.get_logger().warn('VFH gap search failed: %s' % e)
                     candidate_theta = 0.9 if self.dl >= self.dr else -0.9
@@ -982,7 +1019,7 @@ class AvoidNode(Node):
 
         try:
             motion = compute_vfh_motion(
-                depth=self.depth,
+                depth=self.navigation_depth(),
                 params=self.vfh_params,
                 body_heading=body_heading,
                 goal_x=goal_x,
