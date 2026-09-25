@@ -15,11 +15,9 @@ except ImportError:  # run with ``scripts/`` itself on sys.path
     from uav_semantic_schema import CLASS_TO_ID
 
 
-# How close an occupancy point must be to a tracked object's centre before it
-# inherits that object's class.  The tracker stores one centre per object, not
-# an extent, so this radius is what stands in for "belongs to that object".
-# Tune it against the acceptance counts, not by taste: too small and trees fail
-# the ">= 200 labelled points" bar, too large and neighbouring classes bleed.
+# Fallback radius for objects that carry no extent -- either older snapshots or
+# detections the camera could not size.  Objects with a half_width/half_height
+# are labelled by their own box instead; see assign_semantic_ids.
 SEMANTIC_ASSIGN_RADIUS_M = 3.0
 
 # Chunk size for the point-to-object distance sweep.  2.5M points against ~20
@@ -58,7 +56,11 @@ def _class_color_for_label(label):
 
 
 def _labeled_objects(semantic_objects):
-    """Collect (class_id, colour, centre) for objects we can actually place."""
+    """Collect (class_id, colour, centre, half_width, half_height).
+
+    ``half_width``/``half_height`` are None for objects that predate extents
+    (or whose detector could not size them); those fall back to a sphere.
+    """
     collected = []
     for item in semantic_objects:
         if not isinstance(item, dict):
@@ -73,21 +75,42 @@ def _labeled_objects(semantic_objects):
             centre = [float(value) for value in position]
         except (TypeError, ValueError):
             continue
+        extent = None
+        if item.get("half_width") and item.get("half_height"):
+            try:
+                extent = (float(item["half_width"]), float(item["half_height"]))
+            except (TypeError, ValueError):
+                extent = None
         collected.append((
             class_id,
             _class_color_for_label(item.get("label")),
             centre,
+            extent[0] if extent else None,
+            extent[1] if extent else None,
         ))
     return collected
 
 
 def assign_semantic_ids(points, semantic_objects, radius=None) -> np.ndarray:
-    """Label each point with the class of the nearest tracked object.
+    """Label each point with the class of the object whose box contains it.
 
     ``points`` and the objects' ``position_ned`` must share a frame -- both are
-    PX4 local NED here.  Points farther than ``radius`` from every object keep
-    -1, i.e. "occupancy only".  Ties go to the nearest centre; when a point is
-    equidistant the lowest object index wins, which keeps the output stable.
+    PX4 local NED here.
+
+    An object that carries ``half_width``/``half_height`` is treated as an
+    axis-aligned box centred on its position: horizontally within half_width
+    (in the north/east plane) and vertically within half_height.  Objects
+    without an extent fall back to a sphere of ``radius``, which is what the
+    caller tuned before extents existed.
+
+    Extents matter because a sphere labels a blob, not the object: measured on
+    a real run, buildings came out as 3.9m-tall lumps with no vertical facade
+    and fences failed a straight-line fit by 0.52m -- both because the ball
+    around each centre is wider than the thing being labelled.
+
+    Overlaps go to the object the point sits deepest inside relative to that
+    object's own size, so a fence post is not swallowed by the building behind
+    it.  Ties keep the earlier object.
     """
     values = np.asarray(points, dtype=np.float32).reshape((-1, 3))
     ids = np.full(len(values), -1, dtype=np.int64)
@@ -99,17 +122,25 @@ def assign_semantic_ids(points, semantic_objects, radius=None) -> np.ndarray:
     if limit <= 0.0:
         raise ValueError("semantic radius must be positive")
 
-    centres = np.asarray([item[2] for item in objects], dtype=np.float32)
-    class_ids = np.asarray([item[0] for item in objects], dtype=np.int64)
-
     for start in range(0, len(values), _SEMANTIC_CHUNK):
         block = values[start:start + _SEMANTIC_CHUNK]
-        delta = block[:, None, :] - centres[None, :, :]
-        distance = np.sqrt(np.einsum("ijk,ijk->ij", delta, delta))
-        nearest = distance.argmin(axis=1)
         rows = np.arange(len(block))
-        close = distance[rows, nearest] <= limit
-        ids[start + rows[close]] = class_ids[nearest[close]]
+        best = np.full(len(block), np.inf, dtype=np.float64)
+        for class_id, _color, centre, half_width, half_height in objects:
+            delta = block - np.asarray(centre, dtype=np.float32)
+            horizontal = np.maximum(np.abs(delta[:, 0]), np.abs(delta[:, 1]))
+            vertical = np.abs(delta[:, 2])
+            if half_width is None:
+                distance = np.hypot(horizontal, vertical)
+                inside = distance <= limit
+                score = distance / limit
+            else:
+                inside = (horizontal <= half_width) & (vertical <= half_height)
+                score = np.maximum(horizontal / max(half_width, 1e-6),
+                                   vertical / max(half_height, 1e-6))
+            better = inside & (score < best)
+            best[better] = score[better]
+            ids[start + rows[better]] = class_id
     return ids
 
 
@@ -404,7 +435,7 @@ def write_ply(path: Path, points, semantic_objects=(), semantic_radius=None) -> 
         tagged = semantic_id >= 0
         if tagged.any():
             palette = {}
-            for object_id, color, _ in _labeled_objects(semantic_objects):
+            for object_id, color, _, _, _ in _labeled_objects(semantic_objects):
                 palette.setdefault(object_id, color)
             keys = np.asarray(sorted(palette), dtype=np.int64)
             table = np.asarray([palette[int(key)] for key in keys], dtype=np.int64)
@@ -448,7 +479,7 @@ def write_pcd(path: Path, points, semantic_objects=(), semantic_radius=None) -> 
         tagged = semantic_id >= 0
         if tagged.any():
             palette = {}
-            for object_id, color, _ in _labeled_objects(semantic_objects):
+            for object_id, color, _, _, _ in _labeled_objects(semantic_objects):
                 palette.setdefault(object_id, color)
             keys = np.asarray(sorted(palette), dtype=np.int64)
             table = np.asarray([palette[int(key)] for key in keys], dtype=np.int64)

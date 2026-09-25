@@ -18,12 +18,14 @@ try:
     from scripts.airsim_compat import AirSimLink, import_airsim
     from scripts.perception_live import FrameRateMeter, LiveFrameWriter
     from scripts.semantic_geometry import (
-        SemanticObjectTracker, project_box_center_ned,
+        SemanticObjectTracker, project_box_center_ned, project_box_extent_ned,
     )
 except ImportError:
     from airsim_compat import AirSimLink, import_airsim
     from perception_live import FrameRateMeter, LiveFrameWriter
-    from semantic_geometry import SemanticObjectTracker, project_box_center_ned
+    from semantic_geometry import (
+        SemanticObjectTracker, project_box_center_ned, project_box_extent_ned,
+    )
 
 
 # How often the tracked objects are flushed to disk while the run is live.
@@ -53,6 +55,9 @@ class Detection:
     box: Tuple[int, int, int, int]
     depth_m: Optional[float] = None
     world_ned: Optional[Tuple[float, float, float]] = None
+    # 物体在世界系下的半宽/半高（米），由框的像素尺寸和深度换算。有了它，
+    # 占据点可以按「落在这个物体自己的盒子里」来标注，而不是按「离中心多近」。
+    extent_ned: Optional[Tuple[float, float]] = None
 
 
 class FirstSeenTracker:
@@ -464,6 +469,9 @@ def main() -> int:
                     world_ned=project_box_center_ned(
                         detection.box, detection.depth_m, frame.shape, camera_fov,
                         camera_position, camera_quaternion,
+                    ),
+                    extent_ned=project_box_extent_ned(
+                        detection.box, detection.depth_m, frame.shape, camera_fov,
                     ),
                 ) for detection in detections]
             frame_index += 1

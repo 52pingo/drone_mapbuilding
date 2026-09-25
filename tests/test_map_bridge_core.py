@@ -121,6 +121,64 @@ def test_markers_carry_their_class_id_not_their_index():
     assert rows[1].endswith("0") is False
 
 
+def test_object_extents_label_a_facade_instead_of_a_ball():
+    """What "a building is a vertical face" needs.
+
+    A sphere around the centre can only ever produce a lump: measured on a real
+    run the biggest building blob was 3.9m tall with a facade variance of 0.28,
+    against thresholds of 4m and 1m^2.  A box of the object's own size captures
+    the wall.
+    """
+    rng = np.random.default_rng(0)
+    wall = np.column_stack((
+        rng.uniform(-9.0, 9.0, 4000),      # 18m wide
+        rng.uniform(-0.2, 0.2, 4000),      # thin
+        rng.uniform(-4.0, 4.0, 4000),      # 8m tall
+    ))
+    boxed = [{"label": "building", "position_ned": [0.0, 0.0, 0.0],
+              "half_width": 9.5, "half_height": 4.2}]
+    sphere = [{"label": "building", "position_ned": [0.0, 0.0, 0.0]}]
+
+    with_extent = assign_semantic_ids(wall, boxed)
+    with_sphere = assign_semantic_ids(wall, sphere)
+
+    assert (with_extent >= 0).mean() > 0.95          # the wall is labelled
+    assert (with_sphere >= 0).mean() < 0.25          # only a ball of it is
+    assert np.ptp(wall[with_extent >= 0, 2]) > 7.5   # near the full 8m height
+    assert np.ptp(wall[with_sphere >= 0, 2]) < 6.0
+
+
+def test_object_extents_follow_a_fence_line_instead_of_a_chain_of_balls():
+    """A fence is a line of posts; the label must not be rounder than the post."""
+    rng = np.random.default_rng(1)
+    along = np.linspace(0.0, 40.0, 2000)
+    posts = np.column_stack((along, rng.normal(0.0, 0.05, 2000),
+                             rng.uniform(-0.9, 0.9, 2000)))
+    objects = [{"label": "fence",
+                "position_ned": [float(x), 0.0, 0.0],
+                "half_width": 1.2, "half_height": 1.0}
+               for x in np.linspace(0.0, 40.0, 20)]
+
+    tagged = assign_semantic_ids(posts, objects)
+    assert (tagged >= 0).mean() > 0.9
+    centre = posts[tagged >= 0, :2].mean(axis=0)
+    _, _, vt = np.linalg.svd(posts[tagged >= 0, :2] - centre, full_matrices=False)
+    residual = float(np.sqrt(np.mean((posts[tagged >= 0, :2] @ vt[1]) ** 2)))
+    assert residual < 0.5
+
+
+def test_extents_beat_the_sphere_when_objects_overlap():
+    """A fence post in front of a building must not be swallowed by it."""
+    objects = [
+        {"label": "building", "position_ned": [0.0, 0.0, 0.0],
+         "half_width": 20.0, "half_height": 10.0},
+        {"label": "fence", "position_ned": [12.0, 0.0, -5.0],
+         "half_width": 1.0, "half_height": 1.0},
+    ]
+    ids = assign_semantic_ids([[12.0, 0.0, -5.0], [1.0, 0.0, -9.0]], objects)
+    assert ids.tolist() == [CLASS_TO_ID["fence"], CLASS_TO_ID["building"]]
+
+
 def test_assign_semantic_ids_labels_only_points_inside_the_radius():
     points = [
         [0.0, 0.0, 0.0],      # 0 m from the tree centre
