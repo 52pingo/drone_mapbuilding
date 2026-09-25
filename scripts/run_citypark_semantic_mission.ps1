@@ -58,7 +58,17 @@ $archiveInitArgs = @(
     # Windows PowerShell 5.1 may decode UTF-8 scripts without BOM as ANSI.
     # Keep the archived mission name ASCII so it is portable in packaged runs.
     '--name', "$EnvironmentName autonomous obstacle avoidance mission",
-    '--goals', $Goals,
+    # Must be the --goals=<value> form, not two array elements.
+    # argparse treats a bare argument starting with '-' as an option name
+    # unless it looks like a plain negative number (its matcher is
+    # ^-\d+$|^-\d*\.\d+$). A waypoint string like "-150,-200;0,0" contains
+    # commas and semicolons, so it does not match, and argparse concludes that
+    # --goals has no value: "argument --goals: expected one argument".
+    # The default "181.55,..." starts with a digit, which is why this stayed
+    # hidden; any route with a negative north component -- the whole
+    # south-west of the park, where the content is densest -- failed on the
+    # first step of the mission.
+    "--goals=$Goals",
     '--flight-z', $FlightZ.ToString([Globalization.CultureInfo]::InvariantCulture),
     '--max-mission-time', $MaxMissionTime.ToString([Globalization.CultureInfo]::InvariantCulture),
     '--weights', $Weights,
