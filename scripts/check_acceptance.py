@@ -31,6 +31,17 @@ except ImportError:  # run with scripts/ itself on sys.path
 
 GROUND_ID = -1
 
+# 被标注点的占比上限。这条是防"把地图涂满"的闸门。
+#
+# 起因：2026-09-25 那轮对象体积估爆，551~630 个树盒子铺满全图，标注率 97.2%，
+# 形状判据全过 —— 但那不是地图，是把每个点都贴上"树"。
+#
+# 为什么用占比而不是"团块跨度上限"：我先试过后者的，它同时把诚实的地图也判死了。
+# 实测（离线重放真实地图点）树的上限从 7m 收到 2.5m，最大连通团块仍跨 43~175m ——
+# 公园里的树挨得近，标注出来的"树"区域本来就是连成一片的，团块跨度代表不了一棵树。
+# 而占比能干净地区分：诚实值 20~40%，涂满值 97%。
+MAX_TAGGED_SHARE = 0.60
+
 
 def read_ascii_ply(path: Path):
     """Return (xyz, semantic_id) from an ASCII PLY written by write_ply."""
@@ -215,9 +226,11 @@ def evaluate(ply_path: Path, objects_path: Path | None,
     else:
         span = float(np.ptp(wall[:, 2]))
         facade = _facade_variance(wall)
+        width = float(max(np.ptp(wall[:, 0]), np.ptp(wall[:, 1])))
         record("building: span + vertical facade",
                span >= 4.0 and facade > 1.0,
                f"biggest blob n={len(wall)} z-span={span:.2f}m "
+               f"xy-span={width:.2f}m "
                f"max-facade-variance={facade:.2f}m^2")
 
     # 4. A fence is a line of posts; take the straightest run we can find.
@@ -297,9 +310,11 @@ def evaluate(ply_path: Path, objects_path: Path | None,
     counts = {name: int(len(classes.get(name, []))) for name in
               ("tree", "building", "fence")}
     enough = all(value >= 100 for value in counts.values())
-    record(f"tagged >= {100*min_tagged_share:.0f}% and >=100 per class",
-           share >= min_tagged_share and enough,
-           f"tagged={100*share:.1f}% counts={counts}")
+    record(f"tagged {100*min_tagged_share:.0f}%-{100*MAX_TAGGED_SHARE:.0f}%"
+           " and >=100 per class",
+           min_tagged_share <= share <= MAX_TAGGED_SHARE and enough,
+           f"tagged={100*share:.1f}% (cap {100*MAX_TAGGED_SHARE:.0f}%) "
+           f"counts={counts}")
 
     return checks
 

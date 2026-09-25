@@ -81,7 +81,7 @@ def test_good_map_passes_every_evaluable_criterion(tmp_path):
     assert result["building: span + vertical facade"] is True
     assert result["fence: straight line + height"] is True
     assert result["ground flat / thin surface"] is None  # retired, not a pass
-    assert result["tagged >= 5% and >=100 per class"] is True
+    assert _share_verdict(evaluate(path, None)) is True
 
 
 def test_flat_ground_only_map_fails_the_span_criterion(tmp_path):
@@ -91,7 +91,7 @@ def test_flat_ground_only_map_fails_the_span_criterion(tmp_path):
     write_ply(path, points, np.full(900, GROUND))
     result = verdicts(evaluate(path, None))
     assert result["z-span >= 5m and not a single spike"] is False
-    assert result["tagged >= 5% and >=100 per class"] is False
+    assert _share_verdict(evaluate(path, None)) is False
 
 
 def test_the_retired_ground_criterion_is_skipped_not_passed(tmp_path):
@@ -112,6 +112,11 @@ def test_the_retired_ground_criterion_is_skipped_not_passed(tmp_path):
     assert retired[0]["detail"].startswith("RETIRED")
 
 
+def _share_verdict(checks):
+    return next(item for item in checks
+                if item["criterion"].startswith("tagged "))["passed"]
+
+
 def test_tagged_share_threshold_is_configurable_and_counts_are_per_class(tmp_path):
     """Only the share moves here; the per-class counts stay satisfied.
 
@@ -120,10 +125,24 @@ def test_tagged_share_threshold_is_configurable_and_counts_are_per_class(tmp_pat
     path = tmp_path / "mixed.ply"
     write_ply(path, *good_map())
 
-    relaxed = verdicts(evaluate(path, None, min_tagged_share=0.50))
-    strict = verdicts(evaluate(path, None, min_tagged_share=0.99))
-    assert relaxed["tagged >= 50% and >=100 per class"] is True
-    assert strict["tagged >= 99% and >=100 per class"] is False
+    assert _share_verdict(evaluate(path, None, min_tagged_share=0.50)) is True
+    assert _share_verdict(evaluate(path, None, min_tagged_share=0.99)) is False
+
+
+def test_a_map_that_labels_almost_everything_fails(tmp_path):
+    """The guard against painting the map, which is how 97.2% got through.
+
+    Objects inflated to cover the whole park passed every shape criterion --
+    the big blob is trivially tall and wide.  The share is what separates a
+    labelled map from a painted one.
+    """
+    path = tmp_path / "painted.ply"
+    points, ids = good_map()
+    write_ply(path, points, np.where(ids == GROUND, CLASS_TO_ID["tree"], ids))
+    checks = evaluate(path, None)
+    assert _share_verdict(checks) is False
+    assert "cap 60%" in next(item for item in checks
+                             if item["criterion"].startswith("tagged "))["detail"]
 
 
 def test_a_class_below_the_count_floor_fails_even_when_the_share_is_fine(tmp_path):
@@ -135,7 +154,7 @@ def test_a_class_below_the_count_floor_fails_even_when_the_share_is_fine(tmp_pat
     write_ply(path, points[keep], ids[keep])
 
     result = verdicts(evaluate(path, None))
-    assert result["tagged >= 5% and >=100 per class"] is False
+    assert _share_verdict(evaluate(path, None)) is False
 
 
 def test_missing_class_fails_rather_than_passing_vacuously(tmp_path):
