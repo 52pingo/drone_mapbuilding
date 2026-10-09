@@ -379,6 +379,15 @@ M4 的真实 CityPark 点云、坐标校准、YOLO 语义叠加和 PLY/JSON/PNG 
 
 ### 发布版首次使用（M6）
 
+免安装打包版从 [Releases](https://github.com/52pingo/drone_mapbuilding/releases) 下载，当前版本 `v0.6.0`：
+
+| 版本 | 下载 |
+|---|---|
+| v0.6.0 | [DroneMapbuilding-win64.zip](https://github.com/52pingo/drone_mapbuilding/releases/download/v0.6.0/DroneMapbuilding-win64.zip) |
+
+约 64 MiB。放在 Release 附件而不是仓库里，是因为每次重新打包 EXE 内容都会变，
+提交进 Git 会让仓库体积随每次发布叠加。仓库里只有源码。
+
 1. 解压 `DroneMapbuilding-win64.zip`，保持 `DroneMapbuilding.exe`、`_internal`、`scripts`、`config`、`ros2_ws` 和 `.tools` 的相对位置，别只复制 EXE。
 2. 把 `best.pt` 放到 EXE 同目录，启动 EXE，进“环境配置”。
 3. “启动方式”选 UE4 编辑器工程或已打包仿真程序；选本地工程、地图和 `AirSim/settings.json`，再检查工作流路径并点“保存并应用”。
