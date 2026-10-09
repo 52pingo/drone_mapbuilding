@@ -164,3 +164,100 @@ def test_preflight_requires_successful_runtime_probe(qtbot, tmp_path):
     page.apply_runtime_probe({key: True for key, _name, _required in page.RUNTIME_COMPONENTS})
     # Runtime is healthy, but deliberately missing local fixture files still block start.
     assert not page.required_ready
+
+
+def test_preflight_locks_stack_button_until_ue4_is_ready(qtbot, tmp_path):
+    page = PreflightPage(RuntimeConfig.defaults(tmp_path))
+    qtbot.addWidget(page)
+
+    # 默认锁定：UE4 没起来之前不给放 PX4 出去。
+    assert not page.stack_button.isEnabled()
+    assert not page.ue4_ready
+    assert "锁定" in page.gate_hint.text()
+    assert page.gate_hint.property("state") == "warning"
+    # 第 1 步必须始终可用，否则就绪状态永远补不上，按钮变成死路。
+    assert page.launch_button.isEnabled()
+
+    page.apply_ue4_state(True, "UE4 窗口与 AirSim RPC 均已就绪")
+    assert page.stack_button.isEnabled()
+    assert page.ue4_ready
+    assert "已就绪" in page.gate_hint.text()
+    assert page.gate_hint.property("state") == "pass"
+
+    # 仿真退出后必须重新锁上。
+    page.apply_ue4_state(False, "UE4 窗口未确认")
+    assert not page.stack_button.isEnabled()
+    assert page.stack_button.toolTip()
+
+
+def test_main_window_gate_follows_the_ue4_readiness_lines(qtbot, tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    config = RuntimeConfig.defaults(repo_root)
+    config.results_dir = tmp_path / "results"
+    window = MainWindow(config)
+    qtbot.addWidget(window)
+    stack_button = window.preflight_page.stack_button
+
+    assert not stack_button.isEnabled()
+
+    window._task_started("ue4", "powershell.exe launch_ue4.ps1")
+    assert not stack_button.isEnabled()
+
+    # 窗口起来了但 RPC 还没通 —— 这时候放 airsim_node 出去就是连不上。
+    window._task_output("ue4", 'GUI_UE4 {"window_ready":true,"airsim_ready":false}')
+    assert not stack_button.isEnabled()
+    assert "RPC" in window.preflight_page.gate_hint.text()
+
+    window._task_output("ue4", 'GUI_UE4 {"window_ready":true,"airsim_ready":true}')
+    assert stack_button.isEnabled()
+    assert window.shell.ue_status.property("state") == "ready"
+
+    window._task_finished("ue4", 0)
+    assert stack_button.isEnabled()
+
+    # 启动器非零退出 = 仿真没起来，就绪状态必须作废。
+    window._task_finished("ue4", 1)
+    assert not stack_button.isEnabled()
+    assert window.shell.ue_status.text() == "UE4 启动失败"
+
+
+def test_main_window_refuses_to_start_the_stack_before_ue4(qtbot, tmp_path, monkeypatch):
+    repo_root = Path(__file__).resolve().parents[1]
+    config = RuntimeConfig.defaults(repo_root)
+    config.results_dir = tmp_path / "results"
+    window = MainWindow(config)
+    qtbot.addWidget(window)
+
+    def explode():
+        raise AssertionError("restart_stack must not run while UE4 is not ready")
+
+    monkeypatch.setattr(window.commands, "restart_stack", explode)
+    warnings = []
+    monkeypatch.setattr(
+        "drone_gui.main_window.QMessageBox.warning",
+        lambda *args, **kwargs: warnings.append(args[1]),
+    )
+    window._restart_stack()
+    assert warnings == ["UE4 未就绪"]
+    # 挡下来之后要把用户带到自检页，否则他不知道去哪补第 1 步。
+    assert window.shell.pages.currentIndex() == MainWindow.PREFLIGHT_PAGE
+
+
+def test_main_window_stack_guard_opens_once_ue4_is_ready(qtbot, tmp_path, monkeypatch):
+    repo_root = Path(__file__).resolve().parents[1]
+    config = RuntimeConfig.defaults(repo_root)
+    config.results_dir = tmp_path / "results"
+    window = MainWindow(config)
+    qtbot.addWidget(window)
+
+    window._task_output("ue4", 'GUI_UE4 {"window_ready":true,"airsim_ready":true}')
+    started = []
+    monkeypatch.setattr(
+        window.runtime, "start", lambda name, spec: started.append(name)
+    )
+    monkeypatch.setattr(
+        "drone_gui.main_window.QMessageBox.warning",
+        lambda *args, **kwargs: pytest.fail("ready UE4 should not be blocked"),
+    )
+    window._restart_stack()
+    assert started == ["stack"]

@@ -109,6 +109,21 @@ class MainWindow(QMainWindow):
             return
         self.runtime.start("ue4", self.commands.launch_ue4())
 
+    def _apply_ue4_gate(self) -> None:
+        """把 UE4 的就绪状态翻译成第 2 步按钮的可用性。
+
+        window_ready 与 airsim_ready 是两个独立信号：窗口有了不代表 RPC
+        通了，而 airsim_node 需要的是后者。
+        """
+        if self._ue_window_ready and self._ue_airsim_ready is True:
+            self.preflight_page.apply_ue4_state(True, "UE4 窗口与 AirSim RPC 均已就绪")
+        elif self._ue_window_ready and self._ue_airsim_ready is False:
+            self.preflight_page.apply_ue4_state(False, "UE4 已打开但 AirSim RPC 未就绪")
+        elif self._ue_window_ready:
+            self.preflight_page.apply_ue4_state(False, "AirSim 检查尚未完成")
+        else:
+            self.preflight_page.apply_ue4_state(False, "UE4 窗口未确认")
+
     def _setup_environment(self, mode: str) -> None:
         self._setup_components = {}
         self.runtime.start("setup", self.commands.setup_environment(mode))
@@ -135,6 +150,18 @@ class MainWindow(QMainWindow):
         self.shell.ue_status.set_state("warning", f"待启动：{config.environment_name}")
 
     def _restart_stack(self) -> None:
+        # 按钮在 UE4 没就绪时是禁用的，这里再挡一次：信号也可能被外部代码
+        # 直接 emit，而先起 PX4 的后果是 airsim_node 连不上 RPC、深度链路
+        # 假就绪后彻底静默——值得在入口处硬挡。
+        if not self.preflight_page.ue4_ready:
+            QMessageBox.warning(
+                self, "UE4 未就绪",
+                "请先完成第 1 步启动 UE4。PX4 / ROS2 在仿真起来之前启动会连不上 "
+                "AirSim，深度链路会先报就绪再静默失效。\n\n"
+                "若仿真其实已在运行，点一下“1  启动 UE4”即可复用它并刷新就绪状态。",
+            )
+            self._show_page(self.PREFLIGHT_PAGE)
+            return
         self.runtime.start("stack", self.commands.restart_stack())
 
     def _start_mission(self, plan: MissionPlan) -> None:
@@ -156,6 +183,7 @@ class MainWindow(QMainWindow):
             self._ue_window_ready = False
             self._ue_airsim_ready = None
             self.shell.ue_status.set_state("running", "UE4 启动中")
+            self.preflight_page.apply_ue4_state(False, "UE4 正在启动")
         elif name == "stack":
             self.shell.stack_status.set_state("running", "PX4 / ROS2 启动中")
         elif name == "mission":
@@ -181,6 +209,7 @@ class MainWindow(QMainWindow):
                     self.shell.ue_status.set_state("ready", "UE4 / AirSim 就绪")
                 elif self._ue_window_ready:
                     self.shell.ue_status.set_state("warning", "UE4 已打开 · AirSim 检查中")
+                self._apply_ue4_gate()
             return
         if name == "setup":
             payload = parse_prefixed_json(text, GUI_SETUP_PREFIX)
@@ -222,11 +251,16 @@ class MainWindow(QMainWindow):
         self._append_log(name, f"EXIT code={exit_code}")
         state = "ready" if exit_code == 0 else "error"
         if name == "ue4":
+            if exit_code != 0:
+                # 启动器非零退出 = 仿真没起来（或校验没过），就绪状态作废。
+                self._ue_window_ready = False
+                self._ue_airsim_ready = None
             if self._ue_window_ready and self._ue_airsim_ready is not True:
                 self.shell.ue_status.set_state("warning", "UE4 已打开 · AirSim 未就绪")
             else:
                 text = "UE4 / AirSim 就绪" if exit_code == 0 else "UE4 启动失败"
                 self.shell.ue_status.set_state(state, text)
+            self._apply_ue4_gate()
         elif name == "stack":
             self.health.stack_finished(exit_code)
         elif name == "probe":
@@ -268,6 +302,10 @@ class MainWindow(QMainWindow):
         if name in badges:
             badge, text = badges[name]
             badge.set_state("error", text)
+        if name == "ue4":
+            self._ue_window_ready = False
+            self._ue_airsim_ready = None
+            self._apply_ue4_gate()
         if name == "mission":
             self.mission_page.set_running(False)
             self.perception.stop("任务异常，视觉流已停止")

@@ -42,6 +42,7 @@ class PreflightPage(QWidget):
         self._local_checks = []
         self._runtime_payload: dict | None = None
         self._probe_completed = False
+        self._ue4_ready = False
 
         intro = QLabel("在启动飞控前确认本机路径、权重、WSL 和输出目录。ROS 话题与深度统计会在启动阶段继续检查。")
         intro.setWordWrap(True)
@@ -60,12 +61,15 @@ class PreflightPage(QWidget):
 
         self.refresh_button = QPushButton("本地 + WSL 动态检查")
         self.refresh_button.clicked.connect(self._request_refresh)
-        launch_button = QPushButton("1  启动 UE4")
-        launch_button.setProperty("kind", "primary")
-        launch_button.clicked.connect(self.launch_ue4_requested)
-        stack_button = QPushButton("2  启动 PX4 / ROS2")
-        stack_button.setProperty("kind", "primary")
-        stack_button.clicked.connect(self.restart_stack_requested)
+        self.launch_button = QPushButton("1  启动 UE4")
+        self.launch_button.setProperty("kind", "primary")
+        self.launch_button.clicked.connect(self.launch_ue4_requested)
+        self.stack_button = QPushButton("2  启动 PX4 / ROS2")
+        self.stack_button.setProperty("kind", "primary")
+        self.stack_button.clicked.connect(self.restart_stack_requested)
+
+        self.gate_hint = QLabel()
+        self.gate_hint.setWordWrap(True)
 
         actions = QFrame()
         actions.setProperty("role", "panel")
@@ -73,8 +77,8 @@ class PreflightPage(QWidget):
         action_layout.setContentsMargins(16, 14, 16, 14)
         action_layout.addWidget(self.refresh_button)
         action_layout.addStretch()
-        action_layout.addWidget(launch_button)
-        action_layout.addWidget(stack_button)
+        action_layout.addWidget(self.launch_button)
+        action_layout.addWidget(self.stack_button)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -83,7 +87,37 @@ class PreflightPage(QWidget):
         layout.addWidget(self.summary)
         layout.addWidget(self.table, 1)
         layout.addWidget(actions)
+        layout.addWidget(self.gate_hint)
+        self.apply_ue4_state(False, "尚未启动 UE4")
         self.refresh()
+
+    def apply_ue4_state(self, ready: bool, detail: str) -> None:
+        """就绪门禁：UE4 没起来就不让放 PX4 / ROS2 出去。
+
+        先起 PX4 再起仿真是这个按钮最容易犯的错，而且失败得很安静：
+        airsim_node 照样能起，只是连不上 RPC，深度链路先报“就绪”再彻底哑掉，
+        用户看到的是任务飞到一半卡死。第 1 步用的是 reuse 策略
+        （launch_ue4.ps1 检测到已在运行的仿真会直接复用），所以锁住第 2 步
+        不等于死路——即使 UE4 是手工开的，点一下第 1 步就能补上就绪状态。
+        """
+        self._ue4_ready = ready
+        self.stack_button.setEnabled(ready)
+        self.stack_button.setToolTip(
+            "" if ready else f"UE4 未就绪（{detail}），请先完成第 1 步"
+        )
+        self.stack_button.setAccessibleDescription(
+            "UE4 已就绪" if ready else f"已禁用：UE4 未就绪，{detail}"
+        )
+        self.gate_hint.setText(
+            "UE4 已就绪，可以启动 PX4 / ROS2。"
+            if ready
+            else f"第 2 步已锁定 —— {detail}。请先完成第 1 步；"
+                 "若仿真已在运行，第 1 步会直接复用它并刷新就绪状态。"
+        )
+        state = "pass" if ready else "warning"
+        self.gate_hint.setProperty("state", state)
+        self.gate_hint.style().unpolish(self.gate_hint)
+        self.gate_hint.style().polish(self.gate_hint)
 
     def _request_refresh(self) -> None:
         self.refresh()
@@ -167,3 +201,7 @@ class PreflightPage(QWidget):
     @property
     def required_ready(self) -> bool:
         return self._probe_completed and not has_required_failures(self._checks)
+
+    @property
+    def ue4_ready(self) -> bool:
+        return self._ue4_ready
