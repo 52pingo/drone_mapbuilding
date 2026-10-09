@@ -47,3 +47,7 @@ WSL/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Scratch output dir used when dist/ is held open by another process during a
+# rebuild.  Like dist/, it is re-created by scripts/build_gui.ps1.
+dist_rebuild/
