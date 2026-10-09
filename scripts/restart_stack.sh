@@ -27,18 +27,46 @@ pkill -f "px4 px4_sitl" 2>/dev/null
 pkill -f "px4_sitl_default" 2>/dev/null
 sleep 2
 
-# 1. PX4 SITL：用 script 分配 80x24 pty，避免 WSLG 误报 131072x1 屏幕导致
+# 1. MicroXRCEAgent —— 必须**先于** PX4 启动。
+#
+# PX4 的 uxrce_dds_client 在启动那一刻就去连 agent 建 participant。如果那时
+# agent 还没起来，它会报
+#     ERROR [uxrce_dds_client] create entities failed: participant: 255
+# 并且**永久放弃**：之后即使 agent 起来了，遥测也不会恢复，任务节点会一直等
+# 位置而卡死。原来这里把 PX4 放在前面、只隔 4 秒就起 agent，正好踩在这个时序上。
+echo "== starting MicroXRCEAgent =="
+setsid "$MICRO_XRCE_AGENT" udp4 -p 8888 > "$LOG/agent.log" 2>&1 </dev/null &
+echo "agent pid=$!"
+
+# 等 agent 真正在监听 udp/8888，再把 PX4 放出去。
+# 注意 8888 是 **UDP**，不能用 /dev/tcp 或 curl 去探——那样永远探不通。
+agent_listening() {
+    if command -v ss >/dev/null 2>&1; then
+        ss -lun 2>/dev/null | grep -q ':8888'
+    elif command -v netstat >/dev/null 2>&1; then
+        netstat -lun 2>/dev/null | grep -q ':8888'
+    else
+        return 1
+    fi
+}
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    if agent_listening; then
+        echo "  agent listening on udp/8888 (attempt $attempt)"
+        break
+    fi
+    sleep 1
+done
+if ! agent_listening; then
+    # 探不到不等于没起来（可能只是没有 ss/netstat），所以只警告不中止。
+    echo "  warning: could not confirm udp/8888 is bound; continuing anyway"
+fi
+
+# 2. PX4 SITL：用 script 分配 80x24 pty，避免 WSLG 误报 131072x1 屏幕导致
 #    pxh 提示符无限重绘、日志膨胀
 echo "== starting PX4 =="
 cd "$PX4_DIR"
 setsid script -qfc "make px4_sitl_default none_iris 2>&1" "$LOG/px4.log" </dev/null >/dev/null 2>&1 &
 echo "PX4 pid=$!"
-
-# 2. MicroXRCEAgent
-sleep 4
-echo "== starting MicroXRCEAgent =="
-setsid "$MICRO_XRCE_AGENT" udp4 -p 8888 > "$LOG/agent.log" 2>&1 </dev/null &
-echo "agent pid=$!"
 
 # 3. lesson4 launch（含 airsim_node + depth_clamp + 点云 + octomap）
 # 注意：直接从脚本后台启动时，若脚本立刻退出，wsl 会话清理会连带杀掉尚未完全
